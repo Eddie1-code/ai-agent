@@ -32,5 +32,6 @@ build/
 ### VS Code ###
 .vscode/
 
-#custom
+### CUSTOM ###
 src/main/java/com/xcw/aiagentbackend/constant/TestApiKey.java
+src/main/resources/application-local.yml
