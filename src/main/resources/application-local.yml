@@ -1,9 +1,0 @@
-spring:
-  application:
-    name: ai-agent-backend
-  ai:
-    dashscope:
-      api-key: sk-956be7b04a9047ffad9de8403d965ba1
-      chat:
-        options:
-          model: qwen-plus
