@@ -35,6 +35,9 @@ public class LoveApp {
     @Resource
     private Advisor loveAppRagCloudAdvisor;
 
+    @Resource
+    private VectorStore pgVectorVectorStore;
+
 
     private final ChatClient chatClient;
 
@@ -124,9 +127,12 @@ public class LoveApp {
                         .param(CHAT_MEMORY_RETRIEVE_SIZE_KEY, 10))
                 // 开启日志，便于观察效果
                 .advisors(new MyLoggerAdvisor())
+                // 应用 RAG 检索增强服务（基于本地知识库服务）
                 //.advisors(new QuestionAnswerAdvisor(loveAppVectorStore)) // 也可以添加 QA Advisor
-                // 应用增强检索服务（云知识库服务）
-                .advisors(loveAppRagCloudAdvisor)
+                // 应用 RAG 检索增强服务（基于云知识库服务）
+                //.advisors(loveAppRagCloudAdvisor)
+                // 应用 RAG 检索增强服务（基于 PgVector 向量存储）
+                .advisors(new QuestionAnswerAdvisor(pgVectorVectorStore))
                 .call()
                 .chatResponse();
         String content = chatResponse.getResult().getOutput().getText();
