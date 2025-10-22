@@ -1,10 +1,7 @@
 package com.xcw.aiagentbackend.exception;
 
 
-/**
- * @author 2340129326 许灿炜
- * @date 2025/10/13
- */
+  
 public class ThrowUtils {
 
     /**

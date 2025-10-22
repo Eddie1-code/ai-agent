@@ -3,10 +3,7 @@ package com.xcw.aiagentbackend.exception;
 
 import lombok.Getter;
 
-/**
- * @author 2340129326 许灿炜
- * @date 2025/10/13
- */
+  
 @Getter
 public class BusinessException extends RuntimeException {
 

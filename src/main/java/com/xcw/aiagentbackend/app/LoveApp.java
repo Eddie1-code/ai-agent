@@ -4,6 +4,8 @@ package com.xcw.aiagentbackend.app;
 import com.xcw.aiagentbackend.advisor.MyLoggerAdvisor;
 import com.xcw.aiagentbackend.advisor.ReReadingAdvisor;
 import com.xcw.aiagentbackend.chatmemory.FileBasedChatMemory;
+import com.xcw.aiagentbackend.rag.LoveAppRagCustomAdvisorFactory;
+import com.xcw.aiagentbackend.rag.QueryRewriter;
 import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
@@ -22,10 +24,7 @@ import java.util.List;
 import static org.springframework.ai.chat.client.advisor.AbstractChatMemoryAdvisor.CHAT_MEMORY_CONVERSATION_ID_KEY;
 import static org.springframework.ai.chat.client.advisor.AbstractChatMemoryAdvisor.CHAT_MEMORY_RETRIEVE_SIZE_KEY;
 
-/**
- * @author 2340129326 许灿炜
- * @date 2025/10/15
- */
+
 @Component
 @Slf4j
 public class LoveApp {
@@ -38,6 +37,8 @@ public class LoveApp {
     @Resource
     private VectorStore pgVectorVectorStore;
 
+    @Resource
+    private QueryRewriter queryRewriter;
 
     private final ChatClient chatClient;
 
@@ -49,6 +50,7 @@ public class LoveApp {
 
     /**
      * 初始化 ChatClient
+     *
      * @param dashscopeChatModel 使用的聊天模型
      */
     public LoveApp(ChatModel dashscopeChatModel) {
@@ -71,8 +73,9 @@ public class LoveApp {
 
     /**
      * AI 基础对话（支持多轮对话记忆）   ==> 处理用户输入，生成回复
+     *
      * @param message 用户输入
-     * @param chatId 对话ID，用于区分不同用户的对话
+     * @param chatId  对话ID，用于区分不同用户的对话
      * @return 生成的回复
      */
     public String doChat(String message, String chatId) {
@@ -95,8 +98,9 @@ public class LoveApp {
 
     /**
      * AI 对话并生成恋爱报告(实现结构化输出)  ==> 处理用户输入，生成回复和恋爱报告
+     *
      * @param message 用户输入
-     * @param chatId 对话ID，用于区分不同用户的对话
+     * @param chatId  对话ID，用于区分不同用户的对话
      * @return 生成的恋爱报告
      */
     public LoveReport doChatWithReport(String message, String chatId) {
@@ -113,16 +117,22 @@ public class LoveApp {
     }
 
     //AI 恋爱大师知识库问答功能
+
     /**
      * AI 对话并结合知识库问答  ==> 处理用户输入，结合知识库生成回复
+     *
      * @param message 用户输入
-     * @param chatId 对话ID，用于区分不同用户的对话
+     * @param chatId  对话ID，用于区分不同用户的对话
      * @return 生成的回复
      */
     public String doChatWithRag(String message, String chatId) {
+        // 先进行查询重写
+        String rewrittenMessage = queryRewriter.doQueryRewrite(message);
+
         ChatResponse chatResponse = chatClient
                 .prompt()
-                .user(message)
+                // 使用重写后的查询进行对话
+                .user(rewrittenMessage)
                 .advisors(spec -> spec.param(CHAT_MEMORY_CONVERSATION_ID_KEY, chatId)
                         .param(CHAT_MEMORY_RETRIEVE_SIZE_KEY, 10))
                 // 开启日志，便于观察效果
@@ -132,8 +142,12 @@ public class LoveApp {
                 // 应用 RAG 检索增强服务（基于云知识库服务）
                 //.advisors(loveAppRagCloudAdvisor)
                 // 应用 RAG 检索增强服务（基于 PgVector 向量存储）
-                .advisors(new QuestionAnswerAdvisor(pgVectorVectorStore))
-                .call()
+                //.advisors(new QuestionAnswerAdvisor(pgVectorVectorStore))
+                //
+                .advisors(LoveAppRagCustomAdvisorFactory.createLoveAppRagCustomAdvisor(
+                        loveAppVectorStore, "已婚")
+
+                ).call()
                 .chatResponse();
         String content = chatResponse.getResult().getOutput().getText();
         log.info("content: {}", content);

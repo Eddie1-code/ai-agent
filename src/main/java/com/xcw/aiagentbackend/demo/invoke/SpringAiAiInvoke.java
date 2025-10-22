@@ -1,10 +1,7 @@
 package com.xcw.aiagentbackend.demo.invoke;
 
 
-/**
- * @author 2340129326 许灿炜
- * @date 2025/10/13
- */
+  
 
 import jakarta.annotation.Resource;
 import org.springframework.ai.chat.messages.AssistantMessage;

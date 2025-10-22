@@ -6,10 +6,7 @@ import lombok.Data;
 
 import java.io.Serializable;
 
-/**
- * @author 2340129326 许灿炜
- * @date 2025/10/13
- */
+  
 
 /**
  * 通用响应类
