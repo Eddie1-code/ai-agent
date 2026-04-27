@@ -15,19 +15,26 @@ spring:
     #      base-url: http://localhost:11434
     #      chat:
     #        model: gemma3:1b
-    mcp:
-      client:
-        sse:
-          connections:
-            server1:
-              url: http://localhost:8127
-#        stdio:
-#          servers-configuration: classpath:mcp-servers.json
+    # 本地默认不强依赖 MCP SSE 服务，避免未启动 8127 时持续报错
+    # mcp:
+    #   client:
+    #     sse:
+    #       connections:
+    #         server1:
+    #           url: http://localhost:8127
+    #     stdio:
+    #       servers-configuration: classpath:mcp-servers.json
 
 server:
   port: 8123
   servlet:
     context-path: /api
+
+app:
+  security:
+    api-keys:
+      - demo-local-key
+    max-requests-per-minute: 120
 # springdoc-openapi
 springdoc:
   swagger-ui:

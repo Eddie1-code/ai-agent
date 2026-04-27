@@ -1,10 +1,8 @@
 package com.xcw.aiagentbackend.exception;
 
-
-  
-
 import com.xcw.aiagentbackend.common.BaseResponse;
 import com.xcw.aiagentbackend.common.ResultUtils;
+import io.swagger.v3.oas.annotations.Hidden;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
@@ -14,6 +12,7 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
  */
 @RestControllerAdvice
 @Slf4j
+@Hidden
 public class GlobalExceptionHandler {
 
 //    @ExceptionHandler(NotLoginException.class)
@@ -38,5 +37,11 @@ public class GlobalExceptionHandler {
     public BaseResponse<?> runtimeExceptionHandler(RuntimeException e) {
         log.error("RuntimeException", e);
         return ResultUtils.error(ErrorCode.SYSTEM_ERROR, "系统错误");
+    }
+
+    @ExceptionHandler(IllegalArgumentException.class)
+    public BaseResponse<?> illegalArgumentExceptionHandler(IllegalArgumentException e) {
+        log.warn("IllegalArgumentException", e);
+        return ResultUtils.error(ErrorCode.PARAMS_ERROR, e.getMessage());
     }
 }

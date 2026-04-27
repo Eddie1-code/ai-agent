@@ -20,6 +20,7 @@ import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.ToolCallbackProvider;
 import org.springframework.ai.vectorstore.VectorStore;
 import org.springframework.stereotype.Component;
+import reactor.core.publisher.Flux;
 
 import java.util.List;
 
@@ -36,8 +37,9 @@ public class LoveApp {
     @Resource
     private Advisor loveAppRagCloudAdvisor;
 
-    @Resource
-    private VectorStore pgVectorVectorStore;
+    // 移除对pgVectorVectorStore的依赖
+    // @Resource
+    // private VectorStore pgVectorVectorStore;
 
     @Resource
     private QueryRewriter queryRewriter;
@@ -140,16 +142,15 @@ public class LoveApp {
                 // 开启日志，便于观察效果
                 .advisors(new MyLoggerAdvisor())
                 // 应用 RAG 检索增强服务（基于本地知识库服务）
-                //.advisors(new QuestionAnswerAdvisor(loveAppVectorStore)) // 也可以添加 QA Advisor
+                .advisors(new QuestionAnswerAdvisor(loveAppVectorStore)) // 也可以添加 QA Advisor
                 // 应用 RAG 检索增强服务（基于云知识库服务）
                 //.advisors(loveAppRagCloudAdvisor)
                 // 应用 RAG 检索增强服务（基于 PgVector 向量存储）
                 //.advisors(new QuestionAnswerAdvisor(pgVectorVectorStore))
                 //
-                .advisors(LoveAppRagCustomAdvisorFactory.createLoveAppRagCustomAdvisor(
-                        loveAppVectorStore, "已婚")
-
-                ).call()
+//                .advisors(LoveAppRagCustomAdvisorFactory.createLoveAppRagCustomAdvisor(
+//                        loveAppVectorStore, "已婚"))
+                .call()
                 .chatResponse();
         String content = chatResponse.getResult().getOutput().getText();
         log.info("content: {}", content);
@@ -207,5 +208,22 @@ public class LoveApp {
         String content = response.getResult().getOutput().getText();
         log.info("content: {}", content);
         return content;
+    }
+
+    /**
+     * AI 基础对话流式响应（支持多轮对话记忆）  ==> 处理用户输入，生成流式回复
+     *
+     * @param message 用户输入
+     * @param chatId  对话ID，用于区分不同用户的对话
+     * @return 流式回复内容
+     */
+    public Flux<String> doChatByStream(String message, String chatId) {
+        return chatClient
+                .prompt()
+                .user(message)
+                .advisors(spec -> spec.param(CHAT_MEMORY_CONVERSATION_ID_KEY, chatId)
+                        .param(CHAT_MEMORY_RETRIEVE_SIZE_KEY, 10))
+                .stream()
+                .content();
     }
 }
