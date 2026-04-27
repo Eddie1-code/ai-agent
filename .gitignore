@@ -35,6 +35,7 @@ build/
 ### CUSTOM ###
 src/main/java/com/xcw/aiagentbackend/constant/TestApiKey.java
 src/main/resources/application-local.yml
+src/main/resources/application-prod.yml
 src/main/resources/mcp-servers.json
 
 tmp

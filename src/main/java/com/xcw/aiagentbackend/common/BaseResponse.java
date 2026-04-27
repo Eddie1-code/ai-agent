@@ -5,6 +5,8 @@ import com.xcw.aiagentbackend.exception.ErrorCode;
 import lombok.Data;
 
 import java.io.Serializable;
+import java.time.LocalDateTime;
+import java.util.UUID;
 
   
 
@@ -20,10 +22,16 @@ public class BaseResponse<T> implements Serializable {
 
     private String message;
 
+    private String requestId;
+
+    private LocalDateTime timestamp;
+
     public BaseResponse(int code, T data, String message) {
         this.code = code;
         this.data = data;
         this.message = message;
+        this.requestId = UUID.randomUUID().toString();
+        this.timestamp = LocalDateTime.now();
     }
 
     public BaseResponse(int code, T data) {
