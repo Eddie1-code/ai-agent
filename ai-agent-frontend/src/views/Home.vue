@@ -7,6 +7,15 @@
         <a href="#about">About</a>
         <a href="#skills">Skills</a>
         <a href="#projects">Projects</a>
+        <button class="top-nav-profile" @click="navigateTo('/profile')" aria-label="进入个人中心">
+          <span class="top-nav-profile__icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none">
+              <circle cx="12" cy="8" r="3.5" stroke="currentColor" stroke-width="1.7" />
+              <path d="M5.5 18.2C6.6 15.5 9.1 14 12 14C14.9 14 17.4 15.5 18.5 18.2" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" />
+            </svg>
+          </span>
+          <span>Profile</span>
+        </button>
       </nav>
     </header>
 
@@ -39,8 +48,8 @@
             <h1>{{ brandCopy.heroTitle }}</h1>
             <p class="hero-copy">{{ brandCopy.heroDescription }}</p>
             <div class="hero-actions">
-              <button class="btn-pill btn-pill--primary" @click="navigateTo('/chat?mode=coach')">{{ brandCopy.heroPrimaryCta }}</button>
-              <button class="btn-pill" @click="navigateTo('/chat?mode=planner')">{{ brandCopy.heroSecondaryCta }}</button>
+              <button class="btn-pill btn-pill--primary" @click="navigateToSession('/chat?mode=coach')">{{ brandCopy.heroPrimaryCta }}</button>
+              <button class="btn-pill" @click="navigateToSession('/chat?mode=planner')">{{ brandCopy.heroSecondaryCta }}</button>
             </div>
           </div>
         </div>
@@ -220,7 +229,7 @@
             <span class="contact-title-line contact-title-line--left" :style="{ '--line-progress': calcContactLineProgress(2).toFixed(3) }">LOOP.</span>
           </h2>
           <p>{{ brandCopy.contact.copy }}</p>
-          <button class="btn-pill btn-pill--primary contact-cta-btn" @click="navigateTo('/chat?mode=coach')">{{ brandCopy.contact.cta }}</button>
+          <button class="btn-pill btn-pill--primary contact-cta-btn" @click="navigateToSession('/chat?mode=coach')">{{ brandCopy.contact.cta }}</button>
         </div>
       </section>
     </main>
@@ -237,6 +246,7 @@ import { useRouter } from 'vue-router'
 import { useHead } from '@vueuse/head'
 import AppFooter from '../components/AppFooter.vue'
 import { brandCopy } from '../constants/copy'
+import { getAuthToken } from '../api'
 
 useHead({
   title: '个性化AI生活导师',
@@ -326,6 +336,13 @@ const aboutBlocks = [
 ]
 
 const navigateTo = (path) => router.push(path)
+const navigateToSession = (path) => {
+  if (!getAuthToken()) {
+    router.push({ path: '/login', query: { redirect: path } })
+    return
+  }
+  router.push(path)
+}
 
 const onInkMove = (event) => {
   const rect = event.currentTarget.getBoundingClientRect()
@@ -561,6 +578,41 @@ onBeforeUnmount(() => {
   text-transform: uppercase;
   letter-spacing: 0.12em;
   color: var(--ink-muted);
+}
+
+.top-nav-profile {
+  height: 36px;
+  padding: 0 13px 0 11px;
+  border: 1px solid rgba(145, 186, 255, 0.36);
+  border-radius: 999px;
+  background: linear-gradient(140deg, rgba(20, 39, 67, 0.65), rgba(15, 21, 36, 0.72));
+  color: #d7e8ff;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.top-nav-profile:hover {
+  transform: translateY(-1px);
+  border-color: rgba(145, 186, 255, 0.6);
+  box-shadow: 0 10px 24px rgba(22, 70, 144, 0.22);
+}
+
+.top-nav-profile__icon {
+  width: 16px;
+  height: 16px;
+  display: grid;
+  place-items: center;
+}
+
+.top-nav-profile__icon svg {
+  width: 14px;
+  height: 14px;
 }
 
 .issue-section {
