@@ -1,0 +1,11 @@
+.git
+.idea
+.cursor
+target
+node_modules
+ai-agent-frontend/node_modules
+ai-agent-frontend/dist
+*.iml
+*.log
+tmp
+agent-transcripts
