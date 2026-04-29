@@ -1,9 +1,11 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import Home from '../views/Home.vue'
 import Chat from '../views/ChatPage.vue'
-import SuperAgent from '../views/SuperAgent.vue'
-import LoveMaster from '../views/LoveMaster.vue'
+import Login from '../views/Login.vue'
+import Register from '../views/Register.vue'
+import Profile from '../views/Profile.vue'
 import Receipt3D from '../views/Receipt3D.vue'
+import { getAuthToken } from '../api'
 
 const routes = [
   {
@@ -17,14 +19,19 @@ const routes = [
     component: Chat
   },
   {
-    path: '/super-agent',
-    name: 'SuperAgent',
-    component: SuperAgent
+    path: '/login',
+    name: 'Login',
+    component: Login
   },
   {
-    path: '/love-master',
-    name: 'LoveMaster',
-    component: LoveMaster
+    path: '/register',
+    name: 'Register',
+    component: Register
+  },
+  {
+    path: '/profile',
+    name: 'Profile',
+    component: Profile
   },
   {
     path: '/receipt-3d',
@@ -41,6 +48,21 @@ const routes = [
 const router = createRouter({
   history: createWebHistory(),
   routes
+})
+
+const protectedRoutes = new Set(['/chat', '/profile'])
+
+router.beforeEach((to, from, next) => {
+  if (!protectedRoutes.has(to.path)) {
+    next()
+    return
+  }
+  const token = getAuthToken()
+  if (!token) {
+    next({ path: '/login', query: { redirect: to.fullPath } })
+    return
+  }
+  next()
 })
 
 export default router

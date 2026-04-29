@@ -1,12 +1,13 @@
 package com.xcw.aiagentbackend.config;
 
-import jakarta.annotation.Resource;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Component;
 import org.springframework.web.servlet.HandlerInterceptor;
+import com.xcw.aiagentbackend.service.ApiKeyService;
+import jakarta.annotation.Resource;
 
 import java.util.ArrayDeque;
 import java.util.Map;
@@ -24,22 +25,18 @@ public class ApiKeyAuthInterceptor implements HandlerInterceptor {
     @Resource
     private ApiSecurityProperties apiSecurityProperties;
 
+    @Resource
+    private ApiKeyService apiKeyService;
+
     @Override
     public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) throws Exception {
         request.setAttribute(START_AT, System.currentTimeMillis());
-        String path = request.getRequestURI();
-        if (path.contains("/swagger") || path.contains("/v3/api-docs") || path.contains("/health")) {
-            return true;
-        }
-        String apiKey = request.getHeader(API_KEY_HEADER);
+        String apiKey = (String) request.getAttribute("apiKey");
         if (apiKey == null || apiKey.isBlank()) {
-            apiKey = request.getParameter("apiKey");
+            apiKey = request.getHeader(API_KEY_HEADER);
         }
-        if (apiKey == null || apiKey.isBlank() || !apiSecurityProperties.getApiKeys().contains(apiKey)) {
-            response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
-            response.setContentType("application/json;charset=UTF-8");
-            response.getWriter().write("{\"code\":40100,\"message\":\"非法 API Key\",\"data\":null}");
-            return false;
+        if (apiKey == null || apiKey.isBlank()) {
+            return true;
         }
         if (!allowRequest(apiKey, request.getRemoteAddr())) {
             response.setStatus(429);
@@ -55,6 +52,11 @@ public class ApiKeyAuthInterceptor implements HandlerInterceptor {
         Long startAt = (Long) request.getAttribute(START_AT);
         if (startAt != null) {
             long cost = System.currentTimeMillis() - startAt;
+            Object apiKeyId = request.getAttribute("apiKeyId");
+            if (apiKeyId instanceof Long keyId) {
+                String requestId = request.getParameter("requestId");
+                apiKeyService.recordUsage(keyId, requestId, request.getRequestURI(), request.getMethod(), response.getStatus(), cost);
+            }
             log.info("api_usage uri={} method={} status={} costMs={} apiKey={}",
                     request.getRequestURI(),
                     request.getMethod(),

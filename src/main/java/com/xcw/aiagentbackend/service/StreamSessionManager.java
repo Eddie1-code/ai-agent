@@ -41,6 +41,10 @@ public class StreamSessionManager {
         return false;
     }
 
+    public boolean hasSession(String requestId) {
+        return subscriptions.containsKey(requestId) || cancelSignals.containsKey(requestId);
+    }
+
     public boolean isCancelled(String requestId) {
         AtomicBoolean signal = cancelSignals.get(requestId);
         return signal != null && signal.get();

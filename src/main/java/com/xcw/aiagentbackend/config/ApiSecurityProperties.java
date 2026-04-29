@@ -13,4 +13,6 @@ import java.util.List;
 public class ApiSecurityProperties {
     private List<String> apiKeys = new ArrayList<>();
     private int maxRequestsPerMinute = 60;
+    private String jwtSecret = "change-me-to-a-long-secret-key-change-me";
+    private long jwtExpireSeconds = 86400;
 }

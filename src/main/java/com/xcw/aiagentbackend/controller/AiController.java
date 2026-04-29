@@ -1,14 +1,20 @@
 package com.xcw.aiagentbackend.controller;
+import cn.hutool.json.JSONObject;
+import cn.hutool.json.JSONUtil;
 import com.xcw.aiagentbackend.common.BaseResponse;
 import com.xcw.aiagentbackend.common.ResultUtils;
+import com.xcw.aiagentbackend.exception.BusinessException;
+import com.xcw.aiagentbackend.exception.ErrorCode;
 import com.xcw.aiagentbackend.model.chat.ChatStreamRequest;
 import com.xcw.aiagentbackend.model.chat.MentorMode;
 import com.xcw.aiagentbackend.model.chat.StreamEvent;
+import com.xcw.aiagentbackend.service.ChatSessionService;
 import com.xcw.aiagentbackend.service.MentorChatService;
 import com.xcw.aiagentbackend.service.StreamSessionManager;
 import jakarta.annotation.Resource;
-import org.springframework.http.HttpStatus;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
+import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -18,11 +24,33 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import reactor.core.publisher.Flux;
 
 import java.io.IOException;
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.regex.Pattern;
+import java.util.regex.Matcher;
 
 @RestController
 @RequestMapping("/ai")
 public class AiController {
+    private static final int MAX_EVENT_TEXT_LENGTH = 1200;
+    private static final int MAX_TOTAL_STREAM_CHARS = 12000;
+    private static final int MAX_REPEAT_CHUNK_COUNT = 6;
+    private static final Pattern HTML_TAG_PATTERN = Pattern.compile("<[^>]+>");
+    private static final Pattern JSON_TITLE_PATTERN = Pattern.compile("\\\\?\"title\\\\?\"\\s*:\\s*\\\\?\"(.*?)\\\\?\"");
+    private static final Pattern IMAGE_URL_PATTERN = Pattern.compile("https?://\\S+", Pattern.CASE_INSENSITIVE);
+    private static final Pattern LOCAL_IMAGE_PATH_PATTERN = Pattern.compile("/api/public/images/\\S+", Pattern.CASE_INSENSITIVE);
+    private final Map<String, String> plannerPhaseByRequestId = new ConcurrentHashMap<>();
+    private final Map<String, Integer> streamCharCountByRequestId = new ConcurrentHashMap<>();
+    private final Map<String, String> lastChunkByRequestId = new ConcurrentHashMap<>();
+    private final Map<String, Integer> repeatChunkCountByRequestId = new ConcurrentHashMap<>();
+    private final Map<String, ArrayDeque<Long>> imageGenerateTimestampsByUser = new ConcurrentHashMap<>();
+
+    @Value("${tencent.aiart.max-generate-per-minute:6}")
+    private int maxImageGeneratePerMinute;
 
     @Resource
     private MentorChatService mentorChatService;
@@ -30,25 +58,57 @@ public class AiController {
     @Resource
     private StreamSessionManager streamSessionManager;
 
+    @Resource
+    private ChatSessionService chatSessionService;
+
     @GetMapping(value = "/mentor/chat/sse", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public SseEmitter streamMentorChat(String message, String chatId, String mode, String requestId) {
+    public SseEmitter streamMentorChat(String message, String chatId, String mode, String requestId, Authentication authentication) {
         ChatStreamRequest request = new ChatStreamRequest();
         request.setMessage(message);
         request.setChatId(chatId);
         request.setMode(mode);
         request.setRequestId(requestId);
-        return streamMentorChatByRequest(request);
+        return streamMentorChatByRequest(request, authentication);
     }
 
     @PostMapping(value = "/mentor/chat/sse", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public SseEmitter streamMentorChatByRequest(@RequestBody ChatStreamRequest request) {
+    public SseEmitter streamMentorChatByRequest(@RequestBody ChatStreamRequest request, Authentication authentication) {
         String reqId = (request.getRequestId() == null || request.getRequestId().isBlank())
                 ? UUID.randomUUID().toString()
                 : request.getRequestId();
+        String chatId = (request.getChatId() == null || request.getChatId().isBlank())
+                ? UUID.randomUUID().toString()
+                : request.getChatId();
+        request.setChatId(chatId);
         MentorMode mentorMode = MentorMode.fromValue(request.getMode());
         SseEmitter emitter = new SseEmitter(300000L);
+        String username = resolveUsername(authentication);
+        if (isImageGenerateRequest(request.getMessage()) && !allowImageGenerate(username)) {
+            sendEvent(emitter, StreamEvent.builder()
+                    .requestId(reqId)
+                    .seq(streamSessionManager.nextSeq(reqId))
+                    .eventType("error")
+                    .content("图片生成过于频繁，请稍后再试。")
+                    .done(true)
+                    .build());
+            emitter.complete();
+            return emitter;
+        }
+        if (username != null) {
+            try {
+                chatSessionService.ensureSession(username, chatId, mentorMode.name().toLowerCase(), request.getMessage());
+                chatSessionService.appendMessage(username, chatId, "user", "question", request.getMessage(), null);
+            } catch (Exception ignored) {
+            }
+        }
+        StringBuilder assistantBuffer = new StringBuilder();
+        List<String> generatedImages = new ArrayList<>();
 
         streamSessionManager.registerSignal(reqId);
+        streamCharCountByRequestId.put(reqId, 0);
+        if (mentorMode == MentorMode.PLANNER) {
+            plannerPhaseByRequestId.put(reqId, "answer");
+        }
         sendEvent(emitter, StreamEvent.builder()
                 .requestId(reqId)
                 .seq(streamSessionManager.nextSeq(reqId))
@@ -57,14 +117,51 @@ public class AiController {
                 .done(false)
                 .build());
 
-        Flux<String> stream = mentorChatService.chatByStream(mentorMode, request.getMessage(), request.getChatId());
+        Flux<String> stream = mentorChatService.chatByStream(mentorMode, request.getMessage(), chatId);
         streamSessionManager.setSubscription(reqId, stream.subscribe(chunk -> {
             if (!streamSessionManager.isCancelled(reqId)) {
+                String eventType = resolveEventType(mentorMode, reqId, chunk);
+                String displayChunk = sanitizeChunkForDisplay(mentorMode, eventType, chunk);
+                if (displayChunk != null && !displayChunk.isBlank()) {
+                    assistantBuffer.append(displayChunk);
+                }
+                String toolName = null;
+                String toolArgs = null;
+                String toolResult = null;
+                String[] images = extractImageUrls(chunk);
+                if (images != null && images.length > 0) {
+                    for (String image : images) {
+                        if (image != null && !image.isBlank()) {
+                            generatedImages.add(image);
+                        }
+                    }
+                }
+                if ("tool_call".equals(eventType)) {
+                    toolName = extractToolName(chunk);
+                    toolArgs = truncateText(extractToolArgs(chunk), 320);
+                } else if ("tool_result".equals(eventType)) {
+                    toolResult = displayChunk;
+                }
+                if (shouldForceStop(reqId, displayChunk)) {
+                    sendEvent(emitter, StreamEvent.builder()
+                            .requestId(reqId)
+                            .seq(streamSessionManager.nextSeq(reqId))
+                            .eventType("error")
+                            .content("本次规划输出过长或重复过多，已自动停止。请缩小问题范围后重试。")
+                            .done(false)
+                            .build());
+                    streamSessionManager.cancel(reqId);
+                    return;
+                }
                 sendEvent(emitter, StreamEvent.builder()
                         .requestId(reqId)
                         .seq(streamSessionManager.nextSeq(reqId))
-                        .eventType(mentorMode == MentorMode.PLANNER ? "thinking" : "answer")
-                        .content(chunk)
+                        .eventType(eventType)
+                        .content(displayChunk)
+                        .toolName(toolName)
+                        .toolArgs(toolArgs)
+                        .toolResult(toolResult)
+                        .images(images)
                         .done(false)
                         .build());
             }
@@ -77,46 +174,63 @@ public class AiController {
                     .done(true)
                     .build());
             streamSessionManager.cleanup(reqId);
+            cleanupPlannerState(reqId);
             emitter.completeWithError(error);
         }, () -> {
+            boolean cancelled = streamSessionManager.isCancelled(reqId);
+            if (username != null && assistantBuffer.length() > 0) {
+                try {
+                    chatSessionService.appendMessage(
+                            username,
+                            chatId,
+                            "assistant",
+                            cancelled ? "cancelled" : "answer",
+                            assistantBuffer.toString().trim(),
+                            buildAssistantMetadataJson(generatedImages)
+                    );
+                } catch (Exception ignored) {
+                }
+            }
             sendEvent(emitter, StreamEvent.builder()
                     .requestId(reqId)
                     .seq(streamSessionManager.nextSeq(reqId))
-                    .eventType("done")
-                    .content("")
+                    .eventType(cancelled ? "cancelled" : "done")
+                    .content(cancelled ? "已停止" : "")
                     .done(true)
                     .build());
             streamSessionManager.cleanup(reqId);
+            cleanupPlannerState(reqId);
             emitter.complete();
         }));
 
         emitter.onTimeout(() -> {
             streamSessionManager.cancel(reqId);
             streamSessionManager.cleanup(reqId);
+            cleanupPlannerState(reqId);
             emitter.complete();
         });
-        emitter.onCompletion(() -> streamSessionManager.cleanup(reqId));
+        emitter.onCompletion(() -> {
+            streamSessionManager.cleanup(reqId);
+            cleanupPlannerState(reqId);
+        });
         return emitter;
     }
 
     @PostMapping("/mentor/chat/stop")
     public BaseResponse<Boolean> stopMentorChat(@RequestBody ChatStreamRequest request) {
         if (request.getRequestId() == null || request.getRequestId().isBlank()) {
-            return new BaseResponse<>(HttpStatus.BAD_REQUEST.value(), false, "requestId 不能为空");
+            throw new BusinessException(ErrorCode.PARAMS_ERROR, "requestId 不能为空");
+        }
+        if (!streamSessionManager.hasSession(request.getRequestId())) {
+            return ResultUtils.success(false);
         }
         boolean stopped = streamSessionManager.cancel(request.getRequestId());
         return ResultUtils.success(stopped);
     }
 
-    // 兼容旧接口，统一代理到新入口
-    @GetMapping(value = "/love_app/chat/sse", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public SseEmitter doChatWithLoveAppSSE(String message, String chatId) {
-        return streamMentorChat(message, chatId, "coach", null);
-    }
-
     @GetMapping(value = "/manus/chat", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public SseEmitter doChatWithManus(String message) {
-        return streamMentorChat(message, null, "planner", null);
+    public SseEmitter doChatWithManus(String message, Authentication authentication) {
+        return streamMentorChat(message, null, "planner", null, authentication);
     }
 
     private void sendEvent(SseEmitter emitter, StreamEvent event) {
@@ -124,6 +238,371 @@ public class AiController {
             emitter.send(event);
         } catch (IOException e) {
             emitter.completeWithError(e);
+        }
+    }
+
+    private String resolveEventType(MentorMode mode, String requestId, String chunk) {
+        String text = chunk == null ? "" : chunk.trim();
+        if (text.contains("工具名称：") || text.toLowerCase().contains("toolcall")) {
+            return "tool_call";
+        }
+        if (text.contains("完成了它的任务") || text.toLowerCase().contains("result")) {
+            return "tool_result";
+        }
+        if (mode != MentorMode.PLANNER) {
+            return "answer";
+        }
+        if (text.contains("【行动计划】") || text.contains("行动计划")) {
+            plannerPhaseByRequestId.put(requestId, "answer");
+            return "answer";
+        }
+        if (text.contains("【复盘与下一步】")) {
+            plannerPhaseByRequestId.put(requestId, "answer");
+            return "answer";
+        }
+        if (text.startsWith("# ") || text.startsWith("## ") || text.startsWith("### ")) {
+            plannerPhaseByRequestId.put(requestId, "answer");
+            return "answer";
+        }
+        if (text.contains("## 一、目标理解")
+                || text.contains("## 二、约束与风险")
+                || text.contains("## 三、计划策略")
+                || text.contains("## 四、具体方案")
+                || text.contains("## 五、复盘与下一步")) {
+            plannerPhaseByRequestId.put(requestId, "answer");
+            return "answer";
+        }
+        if (text.contains("【思考框架】")) {
+            plannerPhaseByRequestId.put(requestId, "thinking");
+            return "thinking";
+        }
+        if (text.contains("思考过程")) {
+            plannerPhaseByRequestId.put(requestId, "thinking");
+            return "thinking";
+        }
+        return plannerPhaseByRequestId.getOrDefault(requestId, "answer");
+    }
+
+    private String extractToolName(String chunk) {
+        if (chunk == null) {
+            return null;
+        }
+        String marker = "工具名称：";
+        int start = chunk.indexOf(marker);
+        if (start < 0) {
+            return null;
+        }
+        String remain = chunk.substring(start + marker.length()).trim();
+        int commaIndex = remain.indexOf("，参数：");
+        if (commaIndex > 0) {
+            return remain.substring(0, commaIndex).trim();
+        }
+        return remain;
+    }
+
+    private String extractToolArgs(String chunk) {
+        if (chunk == null) {
+            return null;
+        }
+        String marker = "，参数：";
+        int start = chunk.indexOf(marker);
+        if (start < 0) {
+            return null;
+        }
+        return chunk.substring(start + marker.length()).trim();
+    }
+
+    private String resolveUsername(Authentication authentication) {
+        if (authentication == null || authentication.getPrincipal() == null) {
+            return null;
+        }
+        String principal = String.valueOf(authentication.getPrincipal());
+        if (principal.isBlank() || principal.startsWith("apiKey:")) {
+            return null;
+        }
+        return principal;
+    }
+
+    private String sanitizeChunkForDisplay(MentorMode mode, String eventType, String chunk) {
+        if (chunk == null) {
+            return "";
+        }
+        String text = normalizeEscapedText(chunk);
+        text = summarizeTencentImagePayload(text);
+        if (mode == MentorMode.PLANNER && ("thinking".equals(eventType) || "tool_result".equals(eventType))) {
+            if (looksLikeHtml(text)) {
+                String plain = stripHtml(text);
+                if (plain.isBlank()) {
+                    text = "[工具返回网页源码，已隐藏]";
+                } else {
+                    text = "[工具返回网页源码，已自动提取摘要]\n" + truncateText(plain, 260);
+                }
+            } else if (looksLikeStructuredJson(text)) {
+                text = summarizeStructuredJson(text);
+            }
+        }
+        text = replacePotentialBrokenImageLinks(text);
+        return truncateText(text, MAX_EVENT_TEXT_LENGTH);
+    }
+
+    private String summarizeTencentImagePayload(String text) {
+        if (text == null) {
+            return "";
+        }
+        String trimmed = text.trim();
+        if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) {
+            return text;
+        }
+        try {
+            JSONObject json = JSONUtil.parseObj(trimmed);
+            if (!"tencent-aiart".equals(json.getStr("provider"))) {
+                return text;
+            }
+            boolean ok = json.getBool("ok", false);
+            if (ok) {
+                String resolution = json.getStr("resolution");
+                return "图片生成成功（见下方预览）\n- 分辨率：" + (resolution == null ? "默认" : resolution);
+            }
+            String message = json.getStr("message");
+            String fallbackTip = json.getStr("fallbackTip");
+            return "图片生成失败：" + (message == null ? "请稍后重试" : message) +
+                    (fallbackTip == null ? "" : "\n建议：" + fallbackTip);
+        } catch (Exception ignored) {
+            return text;
+        }
+    }
+
+    private String replacePotentialBrokenImageLinks(String text) {
+        if (text == null || text.isBlank()) {
+            return text;
+        }
+        if (text.contains("\"provider\":\"tencent-aiart\"")) {
+            return text;
+        }
+        Matcher matcher = IMAGE_URL_PATTERN.matcher(text);
+        StringBuffer sb = new StringBuffer();
+        boolean replaced = false;
+        while (matcher.find()) {
+            String url = matcher.group();
+            String lower = url.toLowerCase();
+            if (lower.contains("myqcloud.com")) {
+                continue;
+            }
+            boolean looksLikeImage = lower.contains("imgur.com")
+                    || lower.endsWith(".png")
+                    || lower.endsWith(".jpg")
+                    || lower.endsWith(".jpeg")
+                    || lower.endsWith(".webp")
+                    || lower.endsWith(".gif");
+            if (looksLikeImage) {
+                matcher.appendReplacement(sb, "【图片直链暂不可用，请改为文字描述或本地上传图片】");
+                replaced = true;
+            }
+        }
+        matcher.appendTail(sb);
+        return replaced ? sb.toString() : text;
+    }
+
+    private String[] extractImageUrls(String text) {
+        if (text == null || text.isBlank()) {
+            return null;
+        }
+        List<String> imageUrls = new ArrayList<>();
+        try {
+            String trimmed = text.trim();
+            if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
+                JSONObject jsonObject = JSONUtil.parseObj(text);
+                String provider = jsonObject.getStr("provider");
+                String imageUrl = jsonObject.getStr("imageUrl");
+                if ("tencent-aiart".equals(provider)) {
+                    String normalizedImageUrl = normalizeImageUrl(imageUrl);
+                    if (normalizedImageUrl != null && !normalizedImageUrl.isBlank()) {
+                        imageUrls.add(normalizedImageUrl);
+                    }
+                    String remoteImageUrl = normalizeImageUrl(jsonObject.getStr("remoteImageUrl"));
+                    if (remoteImageUrl != null && !remoteImageUrl.isBlank()) {
+                        imageUrls.add(remoteImageUrl);
+                    }
+                }
+            }
+        } catch (Exception ignored) {
+        }
+
+        if (imageUrls.isEmpty()) {
+            Matcher localMatcher = LOCAL_IMAGE_PATH_PATTERN.matcher(text);
+            while (localMatcher.find()) {
+                String url = normalizeImageUrl(localMatcher.group());
+                if (url != null) {
+                    imageUrls.add(url);
+                }
+            }
+        }
+
+        // 优先使用本地持久化地址，避免 COS 临时链接失效导致无法预览
+        imageUrls = imageUrls.stream()
+                .filter(item -> item != null && !item.isBlank())
+                .distinct()
+                .sorted((a, b) -> {
+                    boolean aLocal = a.startsWith("/api/public/images/");
+                    boolean bLocal = b.startsWith("/api/public/images/");
+                    if (aLocal == bLocal) return 0;
+                    return aLocal ? -1 : 1;
+                })
+                .toList();
+
+        if (imageUrls.isEmpty()) {
+            return null;
+        }
+        return imageUrls.toArray(String[]::new);
+    }
+
+    private String normalizeImageUrl(String rawUrl) {
+        if (rawUrl == null || rawUrl.isBlank()) {
+            return null;
+        }
+        String normalized = rawUrl.trim();
+        // 去掉 Markdown 或标点带来的收尾噪音
+        normalized = normalized.replaceAll("[),\\]}>\"']+$", "");
+        // 如果误拼接了第二个 http 链接，只保留第一个
+        int secondHttp = normalized.indexOf("http", 8);
+        if (secondHttp > 0) {
+            normalized = normalized.substring(0, secondHttp);
+            normalized = normalized.replaceAll("[),\\]}>\"']+$", "");
+        }
+        if (!normalized.startsWith("http://") && !normalized.startsWith("https://") && !normalized.startsWith("/api/")) {
+            return null;
+        }
+        return normalized;
+    }
+
+    private boolean looksLikeHtml(String text) {
+        String lower = text.toLowerCase();
+        return lower.contains("<!doctype") || lower.contains("<html") || lower.contains("<script") || lower.contains("<body") || lower.contains("<div");
+    }
+
+    private boolean looksLikeStructuredJson(String text) {
+        String t = text.trim();
+        return t.startsWith("{") || t.startsWith("[") || t.contains("\"title\"") || t.contains("\\\"title\\\"");
+    }
+
+    private String stripHtml(String text) {
+        String noScript = text.replaceAll("(?is)<script.*?>.*?</script>", " ");
+        String noStyle = noScript.replaceAll("(?is)<style.*?>.*?</style>", " ");
+        String noTags = HTML_TAG_PATTERN.matcher(noStyle).replaceAll(" ");
+        return noTags.replaceAll("\\s+", " ").trim();
+    }
+
+    private String truncateText(String text, int maxLength) {
+        if (text == null) {
+            return null;
+        }
+        if (text.length() <= maxLength) {
+            return text;
+        }
+        return text.substring(0, maxLength) + "\n...[内容过长已截断]";
+    }
+
+    private String normalizeEscapedText(String text) {
+        return text
+                .replace("\\u003c", "<")
+                .replace("\\u003e", ">")
+                .replace("\\n", "\n")
+                .replace("\\\"", "\"")
+                .replace("\\/", "/");
+    }
+
+    private String summarizeStructuredJson(String text) {
+        List<String> titles = new ArrayList<>();
+        Matcher matcher = JSON_TITLE_PATTERN.matcher(text);
+        while (matcher.find() && titles.size() < 3) {
+            String title = matcher.group(1);
+            if (title != null && !title.isBlank()) {
+                titles.add(title.trim());
+            }
+        }
+        if (titles.isEmpty()) {
+            return "[工具返回结构化数据，已隐藏原始内容]";
+        }
+        StringBuilder sb = new StringBuilder("[工具返回结构化数据，已提取重点]\n");
+        for (int i = 0; i < titles.size(); i++) {
+            sb.append(i + 1).append(". ").append(titles.get(i)).append("\n");
+        }
+        return sb.toString().trim();
+    }
+
+    private boolean shouldForceStop(String requestId, String chunk) {
+        if (chunk == null || chunk.isBlank()) {
+            return false;
+        }
+        int total = streamCharCountByRequestId.getOrDefault(requestId, 0) + chunk.length();
+        streamCharCountByRequestId.put(requestId, total);
+        if (total > MAX_TOTAL_STREAM_CHARS) {
+            return true;
+        }
+        String normalized = chunk.trim();
+        String last = lastChunkByRequestId.get(requestId);
+        if (normalized.equals(last)) {
+            int repeat = repeatChunkCountByRequestId.getOrDefault(requestId, 1) + 1;
+            repeatChunkCountByRequestId.put(requestId, repeat);
+            return repeat >= MAX_REPEAT_CHUNK_COUNT;
+        }
+        lastChunkByRequestId.put(requestId, normalized);
+        repeatChunkCountByRequestId.put(requestId, 1);
+        return false;
+    }
+
+    private void cleanupPlannerState(String requestId) {
+        plannerPhaseByRequestId.remove(requestId);
+        streamCharCountByRequestId.remove(requestId);
+        lastChunkByRequestId.remove(requestId);
+        repeatChunkCountByRequestId.remove(requestId);
+    }
+
+    private String buildAssistantMetadataJson(List<String> images) {
+        if (images == null || images.isEmpty()) {
+            return null;
+        }
+        List<String> normalized = images.stream()
+                .filter(item -> item != null && !item.isBlank())
+                .distinct()
+                .toList();
+        if (normalized.isEmpty()) {
+            return null;
+        }
+        return JSONUtil.toJsonStr(Map.of(
+                "provider", "tencent-aiart",
+                "images", normalized
+        ));
+    }
+
+    private boolean isImageGenerateRequest(String message) {
+        if (message == null) {
+            return false;
+        }
+        String text = message.toLowerCase();
+        return text.contains("生成图片")
+                || text.contains("生图")
+                || text.contains("配图")
+                || text.contains("海报")
+                || text.contains("封面图")
+                || text.contains("插画")
+                || text.contains("宣传图");
+    }
+
+    private boolean allowImageGenerate(String username) {
+        String bucketKey = (username == null || username.isBlank()) ? "guest" : username;
+        long now = System.currentTimeMillis();
+        long minTs = now - 60_000L;
+        ArrayDeque<Long> deque = imageGenerateTimestampsByUser.computeIfAbsent(bucketKey, key -> new ArrayDeque<>());
+        synchronized (deque) {
+            while (!deque.isEmpty() && deque.peekFirst() < minTs) {
+                deque.pollFirst();
+            }
+            if (deque.size() >= maxImageGeneratePerMinute) {
+                return false;
+            }
+            deque.addLast(now);
+            return true;
         }
     }
 }

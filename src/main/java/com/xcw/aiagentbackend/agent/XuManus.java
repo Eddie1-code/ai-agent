@@ -20,7 +20,9 @@ public class XuManus extends ToolCallAgent {
         String NEXT_STEP_PROMPT = "Based on user needs, proactively select the most appropriate tool "
                 + "or combination of tools. For complex tasks, break down the problem and use different "
                 + "tools step by step. After each tool, clearly explain the result and suggest next steps. "
-                + "If you want to stop interaction, use the terminate tool/function call.";
+                + "Never terminate early on short follow-ups like '需要', '继续', '好的'. "
+                + "Only call the terminate tool when the user explicitly asks to stop, end, or finish the session. "
+                + "If context is insufficient, ask a clarifying question instead of terminating.";
         this.setNextStepPrompt(NEXT_STEP_PROMPT);
         this.setMaxSteps(20);
         // 初始化客户端

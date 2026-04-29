@@ -7,4 +7,5 @@ public class TaskSubmitRequest {
     private String mode;
     private String message;
     private String chatId;
+    private String requestId;
 }

@@ -10,5 +10,9 @@ public class StreamEvent {
     private long seq;
     private String eventType;
     private String content;
+    private String toolName;
+    private String toolArgs;
+    private String toolResult;
+    private String[] images;
     private boolean done;
 }

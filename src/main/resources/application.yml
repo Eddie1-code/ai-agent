@@ -3,14 +3,19 @@ spring:
     name: ai-agent-backend
   profiles:
     active: local
+  datasource:
+    url: jdbc:mysql://127.0.0.1:3306/ai_agent?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai
+    username: root
+    password: 123456
+    driver-class-name: com.mysql.cj.jdbc.Driver
+  data:
+    # Redis配置
+    redis:
+      database: 2
+      host: 127.0.0.1
+      port: 6379
+      password: 123456
   ai:
-    vectorstore:
-      pgvector:
-        index-type: HNSW
-        #了解决向量的维度，根据使用的嵌入模型进行调整
-        dimensions: 1536
-        distance-type: COSINE_DISTANCE
-        max-document-batch-size: 10000 # Optional: Maximum number of documents per batch
     #    ollama:
     #      base-url: http://localhost:11434
     #      chat:
@@ -31,10 +36,28 @@ server:
     context-path: /api
 
 app:
+  rag:
+    local:
+      enabled: false
+    cloud:
+      knowledge-index: ${APP_RAG_CLOUD_KNOWLEDGE_INDEX:AI Agent生活导师}
   security:
+    jwt-secret: ${APP_JWT_SECRET:change-me-to-a-long-secret-key-change-me}
+    jwt-expire-seconds: ${APP_JWT_EXPIRE_SECONDS:86400}
     api-keys:
       - demo-local-key
     max-requests-per-minute: 120
+
+tencent:
+  aiart:
+    enabled: ${TENCENT_AIART_ENABLED:false}
+    secret-id: ${TENCENT_SECRET_ID:}
+    secret-key: ${TENCENT_SECRET_KEY:}
+    region: ${TENCENT_AIART_REGION:ap-guangzhou}
+    default-resolution: ${TENCENT_AIART_DEFAULT_RESOLUTION:1024:1024}
+    rsp-img-type: ${TENCENT_AIART_RSP_IMG_TYPE:url}
+    timeout-seconds: ${TENCENT_AIART_TIMEOUT_SECONDS:60}
+    max-generate-per-minute: ${TENCENT_AIART_MAX_GENERATE_PER_MINUTE:6}
 # springdoc-openapi
 springdoc:
   swagger-ui:
