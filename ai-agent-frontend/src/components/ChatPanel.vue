@@ -15,6 +15,7 @@
               <div v-if="typeTitle(msg.type)" class="bubble-type">{{ typeTitle(msg.type) }}</div>
               <div v-if="msg.type === 'tool_call'" class="tool-card">
                 <div class="tool-card__title">调用工具：{{ msg.toolName || '未识别工具' }}</div>
+                <div v-if="isImageToolCall(msg)" class="tool-card__progress">正在检索并整理图片，请稍候...</div>
                 <div v-if="msg.toolArgs" class="tool-card__summary">{{ summarizeToolText(msg.toolArgs) }}</div>
                 <details v-if="msg.toolArgs" class="tool-card__details">
                   <summary>查看参数原文</summary>
@@ -56,13 +57,17 @@
             <p>{{ msg.content }}</p>
             <small>{{ formatTime(msg.time) }}</small>
           </div>
-          <span class="avatar">ME</span>
+          <span class="avatar avatar--user" :title="userDisplayName">
+            <img v-if="userAvatarUrl" :src="userAvatarUrl" alt="用户头像" />
+            <template v-else>{{ userInitial }}</template>
+          </span>
         </div>
       </div>
     </div>
 
     <div v-if="isImageGenerating" class="image-progress-card" role="status" aria-live="polite">
-      <div class="image-progress-card__text">正在生成图片，请稍候...</div>
+      <div class="image-progress-card__text">{{ imageProgressHint }}</div>
+      <div class="image-progress-card__subtext">已自动过滤无效图片符号，完成后会直接展示可点击预览。</div>
       <div class="image-progress-track">
         <span class="image-progress-bar"></span>
       </div>
@@ -89,7 +94,9 @@ const props = defineProps({
   connectionStatus: { type: String, default: 'disconnected' },
   canStop: { type: Boolean, default: false },
   inputPlaceholder: { type: String, default: '请输入你的问题...' },
-  stopText: { type: String, default: '停止' }
+  stopText: { type: String, default: '停止' },
+  userAvatarUrl: { type: String, default: '' },
+  userDisplayName: { type: String, default: 'ME' }
 })
 
 const emit = defineEmits(['send-message', 'stop-message'])
@@ -111,6 +118,11 @@ const displayMessages = computed(() => {
     grouped.push({ ...msg })
   }
   return grouped
+})
+
+const userInitial = computed(() => {
+  const source = String(props.userDisplayName || 'ME').trim()
+  return source ? source.slice(0, 1).toUpperCase() : 'M'
 })
 
 const sendMessage = () => {
@@ -155,8 +167,71 @@ const escapeHtml = (text = '') =>
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#39;')
 
+const removeLinkHints = (content = '') =>
+  String(content)
+    .replaceAll('[图片链接已折叠，见下方预览]', '')
+    .replaceAll('【图片直链暂不可用，请改为文字描述或本地上传图片】', '')
+
+const compactLongLinks = (content = '') =>
+  String(content).replace(/https?:\/\/\S+/gi, (url) => {
+    const lower = url.toLowerCase()
+    const isLikelyImage =
+      lower.includes('myqcloud.com') ||
+      lower.includes('imgur.com') ||
+      /\.(png|jpg|jpeg|webp|gif)(\?|$)/i.test(lower)
+    const isLongOrSigned =
+      url.length > 90 ||
+      lower.includes('q-signature=') ||
+      lower.includes('x-amz-signature=')
+    if (isLikelyImage && isLongOrSigned) return ''
+    return url
+  })
+
+const removeMarkdownImageArtifacts = (content = '') => {
+  const cleaned = String(content)
+    .replace(/!\[[^\]]*]\((https?:\/\/\S+)\)/gi, '')
+    .replace(/!\[[^\]]*]\([^)]*\)/g, '')
+    .replace(/!\[[^\]]*]\(/g, '')
+    .replace(/!\[\s*]/g, '')
+    .replace(/\[图片链接已折叠，见下方预览]/g, '')
+    .replace(/【图片直链暂不可用，请改为文字描述或本地上传图片】/g, '')
+
+  return cleaned
+    .split(/\r?\n/)
+    .map((line) => {
+      const normalized = line
+        .replace(/^[!\[\]\(\)`'"|]+(?=📍)/g, '')
+        .replace(/[ \t]{2,}/g, ' ')
+      if (/^[!\[\]\(\){}<>_—~.,:;，。！？、：；\-\s]+$/.test(normalized)) {
+        return ''
+      }
+      return normalized
+    })
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+}
+
+const improveTextWrap = (content = '') => {
+  const lines = String(content).split(/\r?\n/)
+  return lines
+    .map((line) => {
+      const plain = line.trim()
+      if (plain.length <= 72) return line
+      // 对超长行按中文标点做断句，提升阅读性。
+      return line.replace(/([。；！？])/g, '$1\n')
+    })
+    .join('\n')
+}
+
 const renderAiMessage = (content = '') => {
-  const normalized = normalizeStructuredText(content)
+  const normalized = normalizeStructuredText(
+    improveTextWrap(
+      removeMarkdownImageArtifacts(
+        compactLongLinks(removeLinkHints(content))
+      )
+    )
+  )
   const safe = escapeHtml(normalized)
   const lines = safe.split(/\r?\n/)
   let html = ''
@@ -196,6 +271,14 @@ const renderAiMessage = (content = '') => {
       html += `<div class="line line-ordered">${withBold}</div>`
       continue
     }
+    if (/^📍\s*/.test(withBold)) {
+      html += `<div class="line line-location">${withBold}</div>`
+      continue
+    }
+    if (/^>\s*/.test(withBold)) {
+      html += `<div class="line line-tip">${withBold.replace(/^>\s*/, '💡 ')}</div>`
+      continue
+    }
     html += `<div class="line">${withBold}</div>`
   }
   return html
@@ -205,6 +288,10 @@ const isImageToolCall = (msg = {}) => {
   const raw = `${msg.toolName || ''} ${msg.toolArgs || ''} ${msg.content || ''}`.toLowerCase()
   return raw.includes('generateimage')
     || raw.includes('tencent-aiart')
+    || raw.includes('searchimage')
+    || raw.includes('image-search-mcp-server')
+    || raw.includes('pexels')
+    || raw.includes('检索图片')
     || raw.includes('图片生成')
     || raw.includes('生图')
 }
@@ -219,6 +306,22 @@ const isImageGenerating = computed(() => {
     if (msg?.type === 'tool_call' && isImageToolCall(msg)) return true
   }
   return false
+})
+
+const imageProgressHint = computed(() => {
+  if (!isImageGenerating.value) return '正在处理图片任务，请稍候...'
+  for (let i = displayMessages.value.length - 1; i >= 0; i -= 1) {
+    const msg = displayMessages.value[i]
+    if (!msg || msg.isUser || msg.type !== 'tool_call' || !isImageToolCall(msg)) continue
+    const raw = `${msg.toolName || ''} ${msg.toolArgs || ''} ${msg.content || ''}`.toLowerCase()
+    if (raw.includes('searchimage') || raw.includes('pexels') || raw.includes('检索图片')) {
+      return '正在为你检索高质量实景图，请稍候...'
+    }
+    if (raw.includes('generateimage') || raw.includes('tencent-aiart') || raw.includes('图片生成') || raw.includes('生图')) {
+      return '正在为你生成配图，请稍候...'
+    }
+  }
+  return '正在整理图文结果并回传，请稍候...'
 })
 
 const sanitizeAssistantMessage = (content = '') => {
@@ -301,41 +404,49 @@ onMounted(scrollToBottom)
   min-height: 56vh;
   max-height: 62vh;
   overflow: auto;
-  padding: 18px;
+  padding: 16px 14px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
 }
 
 .bubble-wrap {
   display: flex;
   align-items: flex-start;
-  max-width: 84%;
+  max-width: 86%;
   min-width: 0;
 }
 
 .bubble-wrap--user {
   margin-left: auto;
-  flex-direction: row-reverse;
+  flex-direction: row;
   min-width: 0;
 }
 
 .avatar {
-  width: 34px;
-  height: 34px;
+  width: 36px;
+  height: 36px;
   border-radius: 999px;
   border: 1px solid var(--line-soft);
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  margin: 0 8px;
+  margin: 0 6px;
   font-size: 11px;
+  overflow: hidden;
+  flex: 0 0 36px;
+}
+
+.avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
 .bubble {
   border: 1px solid var(--line-soft);
-  border-radius: 14px;
-  padding: 10px 12px;
+  border-radius: 12px;
+  padding: 12px 12px;
   background: rgba(255, 255, 255, 0.06);
   width: 100%;
   max-width: 100%;
@@ -345,6 +456,11 @@ onMounted(scrollToBottom)
 
 .bubble-wrap--user .bubble {
   background: rgba(239, 46, 53, 0.2);
+  border-top-right-radius: 8px;
+}
+
+.bubble-wrap--ai .bubble {
+  border-top-left-radius: 8px;
 }
 
 .bubble-wrap.thinking .bubble { border-left: 3px solid var(--cyan); }
@@ -371,7 +487,7 @@ p {
   white-space: pre-wrap;
   word-break: break-word;
   overflow-wrap: anywhere;
-  line-height: 1.7;
+  line-height: 1.72;
   margin: 0 0 6px;
 }
 
@@ -382,7 +498,21 @@ p {
 
 .rich-content :deep(.line-bullet),
 .rich-content :deep(.line-ordered) {
-  padding-left: 2px;
+  padding-left: 4px;
+}
+
+.rich-content :deep(.line-location) {
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(247, 91, 147, 0.28);
+  background: rgba(247, 91, 147, 0.1);
+}
+
+.rich-content :deep(.line-tip) {
+  padding: 6px 10px;
+  border-radius: 8px;
+  border-left: 3px solid rgba(143, 216, 255, 0.7);
+  background: rgba(58, 126, 201, 0.12);
 }
 
 .rich-content :deep(strong) {
@@ -447,8 +577,8 @@ p {
 .tool-card {
   border: 1px solid rgba(95, 219, 183, 0.35);
   background: rgba(24, 74, 62, 0.25);
-  border-radius: 10px;
-  padding: 8px 10px;
+  border-radius: 12px;
+  padding: 10px 11px;
 }
 
 .tool-card--result {
@@ -471,6 +601,13 @@ p {
   font-size: 12px;
   line-height: 1.6;
   color: #d9f5eb;
+  margin-bottom: 6px;
+}
+
+.tool-card__progress {
+  font-size: 12px;
+  line-height: 1.5;
+  color: #bfe6ff;
   margin-bottom: 6px;
 }
 
@@ -558,9 +695,10 @@ p {
 
 small {
   display: block;
-  margin-top: 6px;
+  margin-top: 5px;
   color: var(--ink-muted);
   font-size: 11px;
+  text-align: right;
 }
 
 .typing {
@@ -576,15 +714,23 @@ small {
 
 .image-progress-card {
   margin: 8px 12px 0;
-  padding: 10px 12px;
+  padding: 12px 12px;
   border: 1px solid rgba(122, 203, 255, 0.36);
   border-radius: 12px;
-  background: rgba(20, 41, 66, 0.34);
+  background:
+    radial-gradient(circle at 0% 0%, rgba(71, 157, 255, 0.18), transparent 46%),
+    rgba(20, 41, 66, 0.38);
 }
 
 .image-progress-card__text {
   font-size: 12px;
   color: #bfe6ff;
+  margin-bottom: 4px;
+}
+
+.image-progress-card__subtext {
+  font-size: 11px;
+  color: rgba(191, 230, 255, 0.8);
   margin-bottom: 7px;
 }
 
@@ -641,7 +787,13 @@ button:disabled {
 }
 
 @media (max-width: 760px) {
-  .messages { min-height: 60vh; }
+  .messages {
+    min-height: 60vh;
+    padding: 12px 10px;
+  }
+  .bubble-wrap {
+    max-width: 92%;
+  }
   .composer {
     flex-wrap: wrap;
   }

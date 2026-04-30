@@ -38,6 +38,8 @@
           :can-stop="connectionStatus === 'connecting'"
           :input-placeholder="brandCopy.chat.inputPlaceholder"
           :stop-text="brandCopy.chat.stopText"
+          :user-avatar-url="userAvatarUrl"
+          :user-display-name="userDisplayName"
           @send-message="sendMessage"
           @stop-message="stopMessage"
         />
@@ -51,7 +53,7 @@ import { ref, onMounted, onBeforeUnmount } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useHead } from '@vueuse/head'
 import ChatPanel from '../components/ChatPanel.vue'
-import { streamMentorChat, stopMentorChat, listChatSessions, createChatSession, listSessionMessages, exportLatestPlanPdf, downloadExportPdf } from '../api'
+import { streamMentorChat, stopMentorChat, listChatSessions, createChatSession, listSessionMessages, exportLatestPlanPdf, downloadExportPdf, getProfile } from '../api'
 import { brandCopy } from '../constants/copy'
 
 useHead({
@@ -71,6 +73,9 @@ const activeStreamMsgIndex = ref(-1)
 const streamEndedGracefully = ref(false)
 const sessions = ref([])
 const activeSessionId = ref('')
+const exportingPlan = ref(false)
+const userAvatarUrl = ref('')
+const userDisplayName = ref('ME')
 
 const goBack = () => router.push('/')
 
@@ -162,9 +167,6 @@ const sendMessage = (message) => {
         activeStreamType.value = renderType
         activeStreamMsgIndex.value = -1
       }
-      if (renderType === 'tool_result') {
-        activeStreamMsgIndex.value = -1
-      }
       appendStreamMessage(renderType, payload.content || '', payload)
     },
     () => {
@@ -248,20 +250,31 @@ const createSession = async () => {
 
 const handleSessionChange = async () => {
   if (!activeSessionId.value) return
+  if (eventSource) {
+    eventSource.close()
+    eventSource = null
+  }
+  currentRequestId.value = ''
+  connectionStatus.value = 'disconnected'
+  activeStreamType.value = ''
+  activeStreamMsgIndex.value = -1
+  streamEndedGracefully.value = false
   await loadMessages(activeSessionId.value)
 }
 
 const exportLatestPlan = async () => {
-  if (!activeSessionId.value) return
+  const sessionId = activeSessionId.value
+  if (!sessionId || exportingPlan.value) return
+  exportingPlan.value = true
   try {
-    const res = await exportLatestPlanPdf(activeSessionId.value)
+    const res = await exportLatestPlanPdf(sessionId)
     const exportId = res?.data?.exportId
     if (exportId) {
       const blob = await downloadExportPdf(exportId)
       const objectUrl = URL.createObjectURL(new Blob([blob], { type: 'application/pdf' }))
       const link = document.createElement('a')
       link.href = objectUrl
-      link.download = `plan-${activeSessionId.value}.pdf`
+      link.download = `plan-${sessionId}.pdf`
       document.body.appendChild(link)
       link.click()
       link.remove()
@@ -274,10 +287,21 @@ const exportLatestPlan = async () => {
       type: 'error',
       time: new Date().toISOString()
     })
+  } finally {
+    exportingPlan.value = false
   }
 }
 
 onMounted(async () => {
+  try {
+    const profileRes = await getProfile()
+    const profile = profileRes?.data || {}
+    userAvatarUrl.value = profile.avatarUrl || ''
+    userDisplayName.value = (profile.nickname || profile.username || 'ME').trim()
+  } catch {
+    userAvatarUrl.value = ''
+    userDisplayName.value = 'ME'
+  }
   await loadSessions()
   if (!messages.value.length) {
     messages.value.push({ content: brandCopy.chat.welcome, isUser: false, time: new Date().toISOString() })

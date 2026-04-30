@@ -39,6 +39,9 @@ public class AiController {
     private static final int MAX_EVENT_TEXT_LENGTH = 1200;
     private static final int MAX_TOTAL_STREAM_CHARS = 12000;
     private static final int MAX_REPEAT_CHUNK_COUNT = 6;
+    private static final int DEFAULT_MAX_PREVIEW_IMAGES = 6;
+    private static final int MAX_PREVIEW_IMAGES_WITH_MORE_REQUEST = 12;
+    private static final int MAX_REASONABLE_IMAGE_REQUEST = 20;
     private static final Pattern HTML_TAG_PATTERN = Pattern.compile("<[^>]+>");
     private static final Pattern JSON_TITLE_PATTERN = Pattern.compile("\\\\?\"title\\\\?\"\\s*:\\s*\\\\?\"(.*?)\\\\?\"");
     private static final Pattern IMAGE_URL_PATTERN = Pattern.compile("https?://\\S+", Pattern.CASE_INSENSITIVE);
@@ -83,6 +86,19 @@ public class AiController {
         MentorMode mentorMode = MentorMode.fromValue(request.getMode());
         SseEmitter emitter = new SseEmitter(300000L);
         String username = resolveUsername(authentication);
+        Integer requestedImageCount = extractRequestedImageCount(request.getMessage());
+        if (requestedImageCount != null && requestedImageCount > MAX_REASONABLE_IMAGE_REQUEST) {
+            sendEvent(emitter, StreamEvent.builder()
+                    .requestId(reqId)
+                    .seq(streamSessionManager.nextSeq(reqId))
+                    .eventType("error")
+                    .content("图片数量请求过大（" + requestedImageCount + " 张）。为保证质量与稳定性，单次最多支持 "
+                            + MAX_REASONABLE_IMAGE_REQUEST + " 张。建议先生成 6-12 张精选图，再按地点分批补充。")
+                    .done(true)
+                    .build());
+            emitter.complete();
+            return emitter;
+        }
         if (isImageGenerateRequest(request.getMessage()) && !allowImageGenerate(username)) {
             sendEvent(emitter, StreamEvent.builder()
                     .requestId(reqId)
@@ -103,6 +119,7 @@ public class AiController {
         }
         StringBuilder assistantBuffer = new StringBuilder();
         List<String> generatedImages = new ArrayList<>();
+        int maxPreviewImages = resolveMaxPreviewImages(request.getMessage());
 
         streamSessionManager.registerSignal(reqId);
         streamCharCountByRequestId.put(reqId, 0);
@@ -128,7 +145,7 @@ public class AiController {
                 String toolName = null;
                 String toolArgs = null;
                 String toolResult = null;
-                String[] images = extractImageUrls(chunk);
+                String[] images = limitImagesForRequest(extractImageUrls(chunk), generatedImages, maxPreviewImages);
                 if (images != null && images.length > 0) {
                     for (String image : images) {
                         if (image != null && !image.isBlank()) {
@@ -342,6 +359,9 @@ public class AiController {
             }
         }
         text = replacePotentialBrokenImageLinks(text);
+        text = stripImageLinkArtifacts(text);
+        text = stripNoisySymbolLines(text);
+        text = foldLongImageLinks(text);
         return truncateText(text, MAX_EVENT_TEXT_LENGTH);
     }
 
@@ -403,6 +423,82 @@ public class AiController {
         return replaced ? sb.toString() : text;
     }
 
+    private String foldLongImageLinks(String text) {
+        if (text == null || text.isBlank()) {
+            return text;
+        }
+        // 保留结构化 JSON（供图片提取）不做替换，避免影响解析。
+        String trimmed = text.trim();
+        if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
+            return text;
+        }
+        Matcher matcher = IMAGE_URL_PATTERN.matcher(text);
+        StringBuffer sb = new StringBuffer();
+        boolean replaced = false;
+        while (matcher.find()) {
+            String url = matcher.group();
+            String lower = url.toLowerCase();
+            boolean isLikelyImageUrl = lower.contains("myqcloud.com")
+                    || lower.contains("imgur.com")
+                    || lower.endsWith(".png")
+                    || lower.endsWith(".jpg")
+                    || lower.endsWith(".jpeg")
+                    || lower.endsWith(".webp")
+                    || lower.endsWith(".gif");
+            boolean isLongOrSigned = url.length() > 90 || lower.contains("q-signature=") || lower.contains("x-amz-signature=");
+            if (isLikelyImageUrl && isLongOrSigned) {
+                matcher.appendReplacement(sb, "");
+                replaced = true;
+                continue;
+            }
+            matcher.appendReplacement(sb, Matcher.quoteReplacement(url));
+        }
+        matcher.appendTail(sb);
+        return replaced ? sb.toString().replaceAll("[ \\t]{2,}", " ").replaceAll("\\n{3,}", "\n\n").trim() : text;
+    }
+
+    private String stripImageLinkArtifacts(String text) {
+        if (text == null || text.isBlank()) {
+            return text;
+        }
+        String cleaned = text;
+        // 移除 Markdown 图片语法，避免正文出现链接占位。
+        cleaned = cleaned.replaceAll("!\\[[^\\]]*]\\((https?://\\S+)\\)", "");
+        cleaned = cleaned.replaceAll("!\\[[^\\]]*]\\([^)]*\\)", "");
+        cleaned = cleaned.replace("![]", "");
+        // 移除独立的纯 URL 行（图片链接会由下方图片卡片展示）。
+        cleaned = cleaned.replaceAll("(?m)^\\s*https?://\\S+\\s*$", "");
+        cleaned = cleaned.replace("[图片链接已折叠，见下方预览]", "");
+        cleaned = cleaned.replace("【图片直链暂不可用，请改为文字描述或本地上传图片】", "");
+        return cleaned.replaceAll("[ \\t]{2,}", " ").replaceAll("\\n{3,}", "\n\n").trim();
+    }
+
+    private String stripNoisySymbolLines(String text) {
+        if (text == null || text.isBlank()) {
+            return text;
+        }
+        String cleaned = text;
+        // 仅移除 Markdown 图片残片，保留地点文案中的 emoji/符号样式（例如📍）。
+        cleaned = cleaned.replaceAll("!\\[[^\\]]*]\\(", "");
+        cleaned = cleaned.replaceAll("!\\[\\]", "");
+        String[] lines = cleaned.split("\\R");
+        List<String> kept = new ArrayList<>();
+        for (String line : lines) {
+            if (line == null) {
+                continue;
+            }
+            String normalized = line.trim();
+            if (normalized.isBlank()) {
+                continue;
+            }
+            if (normalized.matches("^[!\\[\\]\\(\\){}<>_—~.,:;，。！？、：；\\-\\s]+$")) {
+                continue;
+            }
+            kept.add(normalized.replaceAll("[ \\t]{2,}", " "));
+        }
+        return String.join("\n", kept);
+    }
+
     private String[] extractImageUrls(String text) {
         if (text == null || text.isBlank()) {
             return null;
@@ -428,13 +524,20 @@ public class AiController {
         } catch (Exception ignored) {
         }
 
-        if (imageUrls.isEmpty()) {
-            Matcher localMatcher = LOCAL_IMAGE_PATH_PATTERN.matcher(text);
-            while (localMatcher.find()) {
-                String url = normalizeImageUrl(localMatcher.group());
-                if (url != null) {
-                    imageUrls.add(url);
-                }
+        Matcher urlMatcher = IMAGE_URL_PATTERN.matcher(text);
+        while (urlMatcher.find()) {
+            String url = normalizeImageUrl(urlMatcher.group());
+            if (url != null && isLikelyImageUrl(url)) {
+                imageUrls.add(url);
+            }
+        }
+
+        // 无论是否已有远端链接，都额外提取本地持久化链接并在排序时优先展示
+        Matcher localMatcher = LOCAL_IMAGE_PATH_PATTERN.matcher(text);
+        while (localMatcher.find()) {
+            String url = normalizeImageUrl(localMatcher.group());
+            if (url != null) {
+                imageUrls.add(url);
             }
         }
 
@@ -454,6 +557,91 @@ public class AiController {
             return null;
         }
         return imageUrls.toArray(String[]::new);
+    }
+
+    private String[] limitImagesForRequest(String[] candidateImages, List<String> generatedImages, int maxPreviewImages) {
+        if (candidateImages == null || candidateImages.length == 0) {
+            return null;
+        }
+        if (generatedImages == null) {
+            generatedImages = new ArrayList<>();
+        }
+        int remaining = Math.max(0, maxPreviewImages - generatedImages.size());
+        if (remaining <= 0) {
+            return null;
+        }
+        List<String> accepted = new ArrayList<>();
+        for (String image : candidateImages) {
+            if (image == null || image.isBlank()) {
+                continue;
+            }
+            if (generatedImages.contains(image) || accepted.contains(image)) {
+                continue;
+            }
+            accepted.add(image);
+            if (accepted.size() >= remaining) {
+                break;
+            }
+        }
+        if (accepted.isEmpty()) {
+            return null;
+        }
+        return accepted.toArray(String[]::new);
+    }
+
+    private int resolveMaxPreviewImages(String message) {
+        if (message == null) {
+            return DEFAULT_MAX_PREVIEW_IMAGES;
+        }
+        String text = message.toLowerCase();
+        boolean moreImagesRequested = text.contains("更多图片")
+                || text.contains("多来几张")
+                || text.contains("多放几张")
+                || text.contains("每个地点多图")
+                || text.contains("每个地方多图")
+                || text.contains("多一点图片");
+        return moreImagesRequested ? MAX_PREVIEW_IMAGES_WITH_MORE_REQUEST : DEFAULT_MAX_PREVIEW_IMAGES;
+    }
+
+    private Integer extractRequestedImageCount(String message) {
+        if (message == null || message.isBlank()) {
+            return null;
+        }
+        Matcher matcher = Pattern.compile("(\\d{1,4})\\s*张").matcher(message);
+        Integer maxCount = null;
+        while (matcher.find()) {
+            try {
+                int count = Integer.parseInt(matcher.group(1));
+                if (maxCount == null || count > maxCount) {
+                    maxCount = count;
+                }
+            } catch (NumberFormatException ignored) {
+            }
+        }
+        return maxCount;
+    }
+
+    private boolean isLikelyImageUrl(String url) {
+        if (url == null || url.isBlank()) {
+            return false;
+        }
+        String lower = url.toLowerCase();
+        if (lower.contains("myqcloud.com")) {
+            return true;
+        }
+        if (lower.contains("pexels.com") || lower.contains("unsplash.com") || lower.contains("pixabay.com")) {
+            return true;
+        }
+        return lower.endsWith(".png")
+                || lower.endsWith(".jpg")
+                || lower.endsWith(".jpeg")
+                || lower.endsWith(".webp")
+                || lower.endsWith(".gif")
+                || lower.contains(".png?")
+                || lower.contains(".jpg?")
+                || lower.contains(".jpeg?")
+                || lower.contains(".webp?")
+                || lower.contains(".gif?");
     }
 
     private String normalizeImageUrl(String rawUrl) {

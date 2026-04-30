@@ -213,7 +213,7 @@ public class ChatSessionService {
         return jdbcTemplate.query("""
                         SELECT id, session_id, user_id, role, event_type, content, metadata_json, created_at
                         FROM chat_message
-                        WHERE session_id = ? AND user_id = ? AND role = 'assistant'
+                        WHERE session_id = ? AND user_id = ? AND role = 'assistant' AND event_type = 'answer'
                         ORDER BY id DESC
                         LIMIT 1
                         """,

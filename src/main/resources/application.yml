@@ -20,12 +20,14 @@ spring:
     #      base-url: http://localhost:11434
     #      chat:
     #        model: gemma3:1b
-    # 本地默认不强依赖 MCP SSE 服务，避免未启动 8127 时持续报错
+    # 本地默认不强依赖 MCP SSE 服务，避免未启动 8127 时持续报错。
+    # 若要验证“高德 MCP 是否实际被调用”，请启用以下配置并观察后端日志关键字：
+    # mentor_route route=mcp / route=planner_then_mcp
     # mcp:
     #   client:
     #     sse:
     #       connections:
-    #         server1:
+    #         amap:
     #           url: http://localhost:8127
     #     stdio:
     #       servers-configuration: classpath:mcp-servers.json

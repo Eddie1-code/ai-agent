@@ -1,5 +1,6 @@
 package com.xcw.aiagentbackend.service;
 
+import cn.hutool.json.JSONUtil;
 import cn.hutool.core.io.FileUtil;
 import com.itextpdf.io.font.PdfEncodings;
 import com.itextpdf.kernel.font.PdfFont;
@@ -9,14 +10,20 @@ import com.itextpdf.kernel.pdf.PdfDocument;
 import com.itextpdf.kernel.pdf.PdfWriter;
 import com.itextpdf.layout.Style;
 import com.itextpdf.layout.Document;
+import com.itextpdf.layout.element.Image;
 import com.itextpdf.layout.element.Paragraph;
+import com.itextpdf.io.image.ImageDataFactory;
 import com.xcw.aiagentbackend.constant.FileConstant;
 import com.xcw.aiagentbackend.model.chat.ChatMessageRecord;
 import com.xcw.aiagentbackend.model.chat.ExportRecord;
 import jakarta.annotation.Resource;
 import org.springframework.stereotype.Service;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
+import java.net.URI;
+import java.net.URL;
 import java.util.ArrayList;
 import java.util.List;
 import java.time.LocalDateTime;
@@ -36,11 +43,11 @@ public class PlanExportService {
         String fileName = "plan-" + LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss"))
                 + "-" + UUID.randomUUID().toString().substring(0, 8) + ".pdf";
         String filePath = dir + "/" + fileName;
-        writePlanPdf(filePath, latest.getContent(), sessionId);
+        writePlanPdf(filePath, latest.getContent(), latest.getMetadataJson(), sessionId);
         return chatSessionService.saveExportRecord(username, sessionId, latest.getId(), filePath);
     }
 
-    private void writePlanPdf(String filePath, String content, String sessionId) {
+    private void writePlanPdf(String filePath, String content, String metadataJson, String sessionId) {
         try (PdfWriter writer = new PdfWriter(filePath);
              PdfDocument pdf = new PdfDocument(writer);
              Document document = new Document(pdf)) {
@@ -98,8 +105,82 @@ public class PlanExportService {
                 }
                 document.add(new Paragraph(line).addStyle(bodyStyle).setMarginBottom(4));
             }
+
+            List<String> images = extractImagesFromMetadata(metadataJson);
+            if (!images.isEmpty()) {
+                document.add(new Paragraph("相关配图").addStyle(h2Style).setMarginTop(10).setMarginBottom(6));
+                for (String imageUrl : images) {
+                    Image image = loadImageSafely(imageUrl);
+                    if (image != null) {
+                        image.setAutoScale(true);
+                        image.setMaxHeight(320);
+                        document.add(image.setMarginBottom(8));
+                    } else {
+                        document.add(new Paragraph("图片链接： " + imageUrl).addStyle(metaStyle).setMarginBottom(4));
+                    }
+                }
+            }
         } catch (IOException e) {
             throw new RuntimeException("导出 PDF 失败: " + e.getMessage(), e);
+        }
+    }
+
+    private List<String> extractImagesFromMetadata(String metadataJson) {
+        List<String> images = new ArrayList<>();
+        if (metadataJson == null || metadataJson.isBlank()) {
+            return images;
+        }
+        try {
+            var obj = JSONUtil.parseObj(metadataJson);
+            var imageArray = obj.getJSONArray("images");
+            if (imageArray == null) {
+                return images;
+            }
+            for (Object item : imageArray) {
+                if (item == null) {
+                    continue;
+                }
+                String value = String.valueOf(item).trim();
+                if (!value.isBlank()) {
+                    images.add(value);
+                }
+            }
+        } catch (Exception ignored) {
+            return List.of();
+        }
+        return images.stream().distinct().toList();
+    }
+
+    private Image loadImageSafely(String imageUrl) {
+        if (imageUrl == null || imageUrl.isBlank()) {
+            return null;
+        }
+        try {
+            String normalized = imageUrl.trim();
+            if (normalized.startsWith("/api/public/images/")) {
+                String fileName = normalized.substring("/api/public/images/".length());
+                String localPath = FileConstant.FILE_SAVE_DIR + "/generated-images/" + fileName;
+                if (!FileUtil.exist(localPath)) {
+                    return null;
+                }
+                return new Image(ImageDataFactory.create(localPath));
+            }
+            if (!normalized.startsWith("http://") && !normalized.startsWith("https://")) {
+                return null;
+            }
+            URI uri = URI.create(normalized);
+            URL url = uri.toURL();
+            try (InputStream inputStream = url.openStream();
+                 ByteArrayOutputStream outputStream = new ByteArrayOutputStream()) {
+                byte[] buffer = new byte[8192];
+                int read;
+                while ((read = inputStream.read(buffer)) != -1) {
+                    outputStream.write(buffer, 0, read);
+                }
+                return new Image(ImageDataFactory.create(outputStream.toByteArray()));
+            }
+        } catch (Exception ignored) {
+            return null;
         }
     }
 

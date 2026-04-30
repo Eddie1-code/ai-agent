@@ -1035,7 +1035,7 @@ onBeforeUnmount(() => {
   gap: 14px;
   transform: translateY(calc((1 - var(--about-details-progress, 1)) * 42px));
   opacity: calc(0.08 + var(--about-details-progress, 1) * 0.92);
-  transition: transform 0.2s linear, opacity 0.2s linear;
+  transition: tr1ansform 0.2s linear, opacity 0.2s linear;
 }
 
 .detail-card {
