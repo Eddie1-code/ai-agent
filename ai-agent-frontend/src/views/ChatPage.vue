@@ -73,7 +73,6 @@ const activeStreamMsgIndex = ref(-1)
 const streamEndedGracefully = ref(false)
 const sessions = ref([])
 const activeSessionId = ref('')
-const exportingPlan = ref(false)
 const userAvatarUrl = ref('')
 const userDisplayName = ref('ME')
 
@@ -228,15 +227,24 @@ const loadMessages = async (sessionId) => {
 }
 
 const loadSessions = async () => {
-  const res = await listChatSessions()
-  sessions.value = (res && res.data) || []
-  if (!sessions.value.length) {
-    await createSession()
-    return
-  }
-  if (!activeSessionId.value) {
-    activeSessionId.value = sessions.value[0].id
-    await loadMessages(activeSessionId.value)
+  try {
+    const res = await listChatSessions()
+    sessions.value = (res && res.data) || []
+    if (!sessions.value.length) {
+      await createSession()
+      return
+    }
+    if (!activeSessionId.value) {
+      activeSessionId.value = sessions.value[0].id
+      await loadMessages(activeSessionId.value)
+    }
+  } catch {
+    sessions.value = []
+    try {
+      await createSession()
+    } catch {
+      /* 后端不可用或仍 401 时避免 mounted 抛错导致白屏 */
+    }
   }
 }
 
@@ -250,31 +258,20 @@ const createSession = async () => {
 
 const handleSessionChange = async () => {
   if (!activeSessionId.value) return
-  if (eventSource) {
-    eventSource.close()
-    eventSource = null
-  }
-  currentRequestId.value = ''
-  connectionStatus.value = 'disconnected'
-  activeStreamType.value = ''
-  activeStreamMsgIndex.value = -1
-  streamEndedGracefully.value = false
   await loadMessages(activeSessionId.value)
 }
 
 const exportLatestPlan = async () => {
-  const sessionId = activeSessionId.value
-  if (!sessionId || exportingPlan.value) return
-  exportingPlan.value = true
+  if (!activeSessionId.value) return
   try {
-    const res = await exportLatestPlanPdf(sessionId)
+    const res = await exportLatestPlanPdf(activeSessionId.value)
     const exportId = res?.data?.exportId
     if (exportId) {
       const blob = await downloadExportPdf(exportId)
       const objectUrl = URL.createObjectURL(new Blob([blob], { type: 'application/pdf' }))
       const link = document.createElement('a')
       link.href = objectUrl
-      link.download = `plan-${sessionId}.pdf`
+      link.download = `plan-${activeSessionId.value}.pdf`
       document.body.appendChild(link)
       link.click()
       link.remove()
@@ -287,15 +284,13 @@ const exportLatestPlan = async () => {
       type: 'error',
       time: new Date().toISOString()
     })
-  } finally {
-    exportingPlan.value = false
   }
 }
 
 onMounted(async () => {
   try {
     const profileRes = await getProfile()
-    const profile = profileRes?.data || {}
+    const profile = profileRes?.data || profileRes || {}
     userAvatarUrl.value = profile.avatarUrl || ''
     userDisplayName.value = (profile.nickname || profile.username || 'ME').trim()
   } catch {

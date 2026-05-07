@@ -187,6 +187,245 @@ const compactLongLinks = (content = '') =>
     return url
   })
 
+const PLANNER_FIELD_LABELS =
+  '核心需求|关键矛盾|具体规避|附加条件|时间窗口|预算约束|人流风险|时间风险|安全风险|预算风险|' +
+  '时间策略|路线策略|氛围策略|备份策略|动线|亮点|便利性|风险提示|推荐地点说明|' +
+  '本轮完成标准|下一步可选项|下一步可执行项'
+
+const isPlannerReportMarkdown = (text = '') => {
+  const t = String(text).trim()
+  if (/^#?\s*行程规划报告/.test(t) || /^行程规划报告/.test(t)) return true
+  if (t.includes('## 一、目标理解')) return true
+  return (
+    t.includes('行程规划报告') &&
+    /[一二三四五][、．.]/.test(t) &&
+    (t.includes('具体方案') || t.includes('目标理解'))
+  )
+}
+
+/** 去掉仅含 # / ## / ### 的废行（模型或断行产生）。 */
+const stripPlannerOrphanHashLines = (text = '') => {
+  if (!isPlannerReportMarkdown(text)) return text
+  return text
+    .split('\n')
+    .filter((line) => !/^#{1,3}\s*$/.test(line.trim()))
+    .join('\n')
+}
+
+const RECO_PLACE_LABEL = /^(?:-\s*)?推荐地点说明[：:]/
+
+/** 一行内多个「地点：说明」粘连时拆成多条列表项。 */
+const splitMergedPlaceLine = (s) => {
+  const str = String(s).trim()
+  const re =
+    /([\u4e00-\u9fa5「」·A-Za-z0-9·\-][\u4e00-\u9fa5「」·A-Za-z0-9·\s]{0,40}?)[：:]\s*/g
+  const matches = [...str.matchAll(re)]
+  if (matches.length <= 1) return null
+  const out = []
+  for (let i = 0; i < matches.length; i += 1) {
+    const start = matches[i].index + matches[i][0].length
+    const end = i + 1 < matches.length ? matches[i + 1].index : str.length
+    const name = matches[i][1].trim().replace(/\s+/g, '')
+    const body = str.slice(start, end).trim()
+    if (name.length >= 2 && body) out.push(`- **${name}**：${body}`)
+  }
+  return out.length ? out : null
+}
+
+const convertTailSummaryLine = (t) => {
+  const s = String(t).trim()
+  if (s.length < 6) return null
+  if (/^[-*•>#]/.test(s) || /^#{1,3}\s/.test(s)) return null
+  const colon = s.match(/^(.{2,42})[：:]\s*(.+)$/)
+  if (colon) return `- **${colon[1].trim()}**：${colon[2].trim()}`
+  const parts = s.split(/\s+/).filter(Boolean)
+  if (parts.length >= 2 && parts[0].length >= 2) {
+    return `- **${parts[0]}** ${parts.slice(1).join(' ')}`
+  }
+  return null
+}
+
+const convertPlaceBodyLine = (t) => {
+  const s = String(t).trim()
+  if (!s) return null
+  if (/^-\s+/.test(s)) {
+    const rest = s.replace(/^-\s+/, '').trim()
+    if (/^\*\*.+\*\*/.test(rest)) return `- ${rest}`
+    const m = rest.match(/^(.{2,45}?)[：:]\s*(.+)$/)
+    if (m) return `- **${m[1].trim()}**：${m[2].trim()}`
+    return `- ${rest}`
+  }
+  const m = s.match(/^(.{2,45}?)[：:]\s*(.+)$/)
+  if (m) return `- **${m[1].trim()}**：${m[2].trim()}`
+  return convertTailSummaryLine(s)
+}
+
+const pushPlaceLinesFromSegment = (segment, out) => {
+  const seg = String(segment).trim()
+  if (!seg) return
+  const merged = splitMergedPlaceLine(seg)
+  if (merged) {
+    merged.forEach((l) => out.push(l))
+    return
+  }
+  const one = convertPlaceBodyLine(seg)
+  if (one) out.push(one)
+  else out.push(`- ${seg}`)
+}
+
+/** 推荐地点说明块 + 「五、」后地点速览转为无序列表，并为地点名加 **（渲染为高亮）。 */
+const enhancePlannerPlaceLists = (text) => {
+  if (!isPlannerReportMarkdown(text)) return text
+  const lines = text.split('\n')
+  const out = []
+  let inReco = false
+  let pastNextSteps = false
+
+  for (let i = 0; i < lines.length; i += 1) {
+    const raw = lines[i]
+    const t = raw.trim()
+
+    if (/^###\s+方案[一二三四]/.test(t)) inReco = false
+
+    if (/^(##\s*)?五[、．.]复盘/.test(t)) {
+      pastNextSteps = false
+    }
+    if (/下一步可执行项/.test(t)) pastNextSteps = true
+    if (pastNextSteps && /^>\s*/.test(t)) pastNextSteps = false
+
+    if (RECO_PLACE_LABEL.test(t)) {
+      inReco = true
+      const after = t.replace(RECO_PLACE_LABEL, '').trim()
+      out.push('- 推荐地点说明：')
+      if (after) pushPlaceLinesFromSegment(after, out)
+      continue
+    }
+
+    if (inReco) {
+      if (!t) {
+        inReco = false
+        out.push(raw)
+        continue
+      }
+      if (
+        /^###\s/.test(t) ||
+        /^##\s*[一二三四五六七八九十]/.test(t) ||
+        /^[一二三四五][、．.](?:目标理解|约束与风险|计划策略|具体方案|复盘)/
+          .test(t)
+      ) {
+        inReco = false
+        out.push(raw)
+        continue
+      }
+      if (
+        /^-\s+(动线|亮点|风险提示|便利性|推荐地点)/.test(t) ||
+        /^方案[一二三四]/.test(t)
+      ) {
+        inReco = false
+        out.push(raw)
+        continue
+      }
+      const merged = splitMergedPlaceLine(t)
+      if (merged) merged.forEach((l) => out.push(l))
+      else {
+        const one = convertPlaceBodyLine(t)
+        if (typeof one === 'string') out.push(one)
+        else out.push(raw)
+      }
+      continue
+    }
+
+    if (
+      pastNextSteps &&
+      t &&
+      !/^[-*•>📍]/.test(t) &&
+      !/^#{1,3}\s/.test(t) &&
+      !/^\d+[\.、]\s*/.test(t) &&
+      !/^①/.test(t) &&
+      !t.startsWith('本轮') &&
+      !t.startsWith('下一步') &&
+      !/完成标准/.test(t)
+    ) {
+      const conv = convertTailSummaryLine(t)
+      if (conv) {
+        out.push(conv)
+        continue
+      }
+    }
+
+    out.push(raw)
+  }
+
+  return out.join('\n')
+}
+
+/** 规划报告：保留成对 **（用于地点名），去掉落单 **；其它对话仍做残缺修复。 */
+const fixBrokenBoldMarkers = (text = '') => {
+  const t = String(text)
+  if (isPlannerReportMarkdown(t)) {
+    const s = '\uE000'
+    const e = '\uE001'
+    return t
+      .replace(/\*\*([^*]+?)\*\*/g, `${s}$1${e}`)
+      .replace(/\*\*/g, '')
+      .replace(/\uE000/g, '**')
+      .replace(/\uE001/g, '**')
+  }
+  const s = '\uE000'
+  const e = '\uE001'
+  return t
+    .replace(/\*\*([^*]+?)\*\*/g, `${s}$1${e}`)
+    .replace(/\*\*([：:])/g, '$1')
+    .replace(/([：:])\*\*/g, '$1')
+    .replace(/\*\*/g, '')
+    .replace(/\uE000/g, '**')
+    .replace(/\uE001/g, '**')
+}
+
+const normalizePlannerHeadingsAndFields = (text = '') => {
+  let t = String(text || '').replace(/\r\n/g, '\n').trim()
+  if (!t) return t
+
+  t = t.replace(/(^|\n)(#{1,3})(?=\S)/g, '$1$2 ')
+
+  if (/^行程规划报告/.test(t) && !/^#\s/.test(t)) {
+    t = t.replace(/^([^\n]+)/, '# $1')
+  }
+
+  t = t.replace(/([。！？])\s*([一二三四五六七八九十]+[、．.])/g, '$1\n$2')
+
+  t = t.replace(/(^|\n)(方案[一二三四][^：\n]{0,20}?)([：:])/g, '$1### $2$3')
+
+  const fieldReMid = new RegExp(`([^\\n])\\s*(${PLANNER_FIELD_LABELS})([：:])`, 'g')
+  t = t.replace(fieldReMid, '$1\n- $2$3')
+  const fieldReStart = new RegExp(`^(${PLANNER_FIELD_LABELS})([：:])`, 'gm')
+  t = t.replace(fieldReStart, '- $1$2')
+
+  const sectionIntroRe =
+    /^([一二三四五六七八九十]+[、．.][^\n：]{2,28}?)\s+([^\n：]{2,16}[：:])\s*(.*)$/gm
+  t = t.replace(sectionIntroRe, '## $1\n- $2$3')
+
+  t = t.replace(/\*\*((?:动线|亮点|便利性|风险提示)[：:])/g, '\n- $1')
+
+  t = t.split('\n').map((line) => {
+    const trimmed = line.trim()
+    if (!trimmed || trimmed.startsWith('#') || trimmed.startsWith('>')) return line
+    if (trimmed.startsWith('- ')) return line
+    const m = trimmed.match(new RegExp(`^(${PLANNER_FIELD_LABELS})([：:])`))
+    if (m) return `- ${trimmed}`
+    return line
+  }).join('\n')
+
+  t = t.replace(/^\*\*\s*/gm, '').replace(/\n\*\*\s*/g, '\n')
+
+  if (isPlannerReportMarkdown(t)) {
+    t = stripPlannerOrphanHashLines(t)
+  }
+  t = t.replace(/\n{3,}/g, '\n\n').trim()
+  t = t.replace(/\n\d{1,2}:\d{2}\s*$/m, '')
+  return t.trim()
+}
+
 const removeMarkdownImageArtifacts = (content = '') => {
   const cleaned = String(content)
     .replace(/!\[[^\]]*]\((https?:\/\/\S+)\)/gi, '')
@@ -201,8 +440,9 @@ const removeMarkdownImageArtifacts = (content = '') => {
     .map((line) => {
       const normalized = line
         .replace(/^[!\[\]\(\)`'"|]+(?=📍)/g, '')
+        .replace(/^▋+$/g, '')
         .replace(/[ \t]{2,}/g, ' ')
-      if (/^[!\[\]\(\){}<>_—~.,:;，。！？、：；\-\s]+$/.test(normalized)) {
+      if (/^[!\[\]\(\){}<>_—~.,:;，。！？、：；\-\s|]+$/.test(normalized)) {
         return ''
       }
       return normalized
@@ -210,6 +450,23 @@ const removeMarkdownImageArtifacts = (content = '') => {
     .join('\n')
     .replace(/\n{3,}/g, '\n\n')
     .trim()
+}
+
+const enforceMarkdownLineBreaks = (content = '') => {
+  let text = String(content || '').replace(/\r\n/g, '\n')
+  text = text
+    .replace(/\s*(###\s*)/g, '\n$1')
+    .replace(/\s*(##\s*)/g, '\n$1')
+    .replace(/\s*(#\s*)/g, '\n$1')
+    .replace(/([^\n])\s*(>\s+)/g, '$1\n$2')
+    .replace(/([^\n])\s*(-\s+)/g, '$1\n$2')
+    .replace(/([^\n])\s*(\d+[\.、]\s+)/g, '$1\n$2')
+    .replace(/([^\n])\s*(?=##\s)/g, '$1\n')
+    .replace(/([^\n])\s*(?=###\s)/g, '$1\n')
+    .replace(/(^|\n)(#{1,3})([^\s#])/g, '$1$2 $3')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+  return text
 }
 
 const improveTextWrap = (content = '') => {
@@ -224,13 +481,39 @@ const improveTextWrap = (content = '') => {
     .join('\n')
 }
 
+const normalizeLineForDetect = (line = '') =>
+  String(line)
+    .replace(/^[-*•>\s]+/, '')
+    .replace(/^#+\s+/, '')
+    .replace(/^[`'"|]+|[`'"|]+$/g, '')
+    .trim()
+
+const isSectionHeading = (line = '') => {
+  const normalized = normalizeLineForDetect(line)
+  return /^(?:第[一二三四五六七八九十百0-9]+[章节部分]|[一二三四五六七八九十百0-9]+[、.．])[^\n]{0,36}[：:]?$/.test(normalized)
+}
+
+const isFieldHeading = (line = '') => {
+  const normalized = normalizeLineForDetect(line)
+  return normalized.length <= 28 && /[：:]$/.test(normalized)
+}
+
+const extractInlineFieldPrefix = (line = '') => {
+  const normalized = normalizeLineForDetect(line)
+  const matched = normalized.match(/^((?:[一二三四五六七八九十百0-9]+[、.．])?[^：:\n]{2,28}[：:])\s*(.+)$/)
+  if (!matched) return null
+  return { prefix: matched[1], rest: matched[2] }
+}
+
 const renderAiMessage = (content = '') => {
+  const raw = compactLongLinks(removeLinkHints(content))
+  const afterFields = normalizePlannerHeadingsAndFields(fixBrokenBoldMarkers(raw))
+  const afterBreaks = enforceMarkdownLineBreaks(afterFields)
+  const afterOrphans = stripPlannerOrphanHashLines(afterBreaks)
+  const afterPlaces = enhancePlannerPlaceLists(afterOrphans)
+  const afterOrphans2 = stripPlannerOrphanHashLines(afterPlaces)
   const normalized = normalizeStructuredText(
-    improveTextWrap(
-      removeMarkdownImageArtifacts(
-        compactLongLinks(removeLinkHints(content))
-      )
-    )
+    improveTextWrap(removeMarkdownImageArtifacts(afterOrphans2))
   )
   const safe = escapeHtml(normalized)
   const lines = safe.split(/\r?\n/)
@@ -242,8 +525,10 @@ const renderAiMessage = (content = '') => {
       html += '<div class="line line-empty"></div>'
       continue
     }
+    const detectLine = normalizeLineForDetect(line)
 
     let withBold = line.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    withBold = withBold.replace(/\*\*/g, '')
     withBold = withBold.replace(/^step\s+(\d+)\s*:\s*/i, '第$1步：')
     if (/^###\s+/.test(withBold)) {
       html += `<h4 class="md-h3">${withBold.replace(/^###\s+/, '')}</h4>`
@@ -263,12 +548,26 @@ const renderAiMessage = (content = '') => {
       continue
     }
 
-    if (/^[-*•]\s+/.test(withBold)) {
-      html += `<div class="line line-bullet">• ${withBold.replace(/^[-*•]\s+/, '')}</div>`
+    if (isSectionHeading(detectLine)) {
+      html += `<h4 class="section-heading">${detectLine}</h4>`
       continue
     }
-    if (/^\d+[\.、]\s+/.test(withBold)) {
-      html += `<div class="line line-ordered">${withBold}</div>`
+    if (isFieldHeading(detectLine)) {
+      html += `<div class="line line-field-heading">${detectLine}</div>`
+      continue
+    }
+    const inlineField = extractInlineFieldPrefix(detectLine)
+    if (inlineField) {
+      html += `<div class="line line-field-inline"><strong>${inlineField.prefix}</strong> ${inlineField.rest}</div>`
+      continue
+    }
+    if (/^[-*•]\s+/.test(withBold)) {
+      html += `<div class="line line-bullet">${withBold.replace(/^[-*•]\s+/, '')}</div>`
+      continue
+    }
+    const orderedMatched = withBold.match(/^(\d+)[\.、]\s+(.+)$/)
+    if (orderedMatched) {
+      html += `<div class="line line-ordered"><span class="line-index">${orderedMatched[1]}</span><span>${orderedMatched[2]}</span></div>`
       continue
     }
     if (/^📍\s*/.test(withBold)) {
@@ -501,18 +800,88 @@ p {
   padding-left: 4px;
 }
 
+.rich-content :deep(.section-heading) {
+  margin: 14px 0 8px;
+  padding: 0 0 6px;
+  border-radius: 0;
+  border: none;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.14);
+  background: transparent;
+  font-size: 1.22rem;
+  line-height: 1.45;
+  font-weight: 800;
+  color: #f2f7ff;
+}
+
+.rich-content :deep(.line-field-heading) {
+  margin-top: 5px;
+  font-weight: 700;
+  color: #f2f7ff;
+}
+
+.rich-content :deep(.line-field-inline) {
+  padding: 2px 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.rich-content :deep(.line-field-inline strong) {
+  color: #f2f7ff;
+}
+
+.rich-content :deep(.line-bullet) {
+  position: relative;
+  padding-left: 18px;
+}
+
+.rich-content :deep(.line-bullet)::before {
+  content: '•';
+  position: absolute;
+  left: 4px;
+  color: rgba(255, 255, 255, 0.55);
+}
+
+.rich-content :deep(.line-bullet strong) {
+  font-weight: 700;
+  color: #9fd9ff;
+  letter-spacing: 0.02em;
+}
+
+.rich-content :deep(.line-ordered) {
+  display: grid;
+  grid-template-columns: 22px 1fr;
+  column-gap: 8px;
+  align-items: start;
+}
+
+.rich-content :deep(.line-index) {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  margin-top: 3px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  color: #f5fbff;
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+}
+
 .rich-content :deep(.line-location) {
-  padding: 6px 10px;
-  border-radius: 8px;
-  border: 1px solid rgba(247, 91, 147, 0.28);
-  background: rgba(247, 91, 147, 0.1);
+  padding: 4px 0;
+  border-radius: 0;
+  border: none;
+  border-left: 2px solid rgba(255, 255, 255, 0.22);
+  padding-left: 10px;
+  background: transparent;
 }
 
 .rich-content :deep(.line-tip) {
-  padding: 6px 10px;
-  border-radius: 8px;
-  border-left: 3px solid rgba(143, 216, 255, 0.7);
-  background: rgba(58, 126, 201, 0.12);
+  padding: 6px 0 6px 10px;
+  border-radius: 0;
+  border-left: 2px solid rgba(255, 255, 255, 0.22);
+  background: transparent;
 }
 
 .rich-content :deep(strong) {
@@ -525,31 +894,31 @@ p {
   font-size: 1.12rem;
   line-height: 1.45;
   font-weight: 800;
-  color: #8fd8ff;
+  color: #f2f7ff;
 }
 
 .rich-content :deep(.md-h1) {
-  margin: 10px 0 8px;
-  font-size: 1.18rem;
-  line-height: 1.45;
+  margin: 12px 0 10px;
+  font-size: 1.38rem;
+  line-height: 1.4;
   font-weight: 800;
   color: #f5fbff;
 }
 
 .rich-content :deep(.md-h2) {
-  margin: 10px 0 6px;
-  font-size: 1.08rem;
-  line-height: 1.45;
+  margin: 14px 0 8px;
+  font-size: 1.24rem;
+  line-height: 1.4;
   font-weight: 800;
-  color: #9fddff;
+  color: #f2f7ff;
 }
 
 .rich-content :deep(.md-h3) {
-  margin: 8px 0 6px;
-  font-size: 1rem;
+  margin: 10px 0 6px;
+  font-size: 1.1rem;
   line-height: 1.45;
   font-weight: 700;
-  color: #c8e8ff;
+  color: #f2f7ff;
 }
 
 .bubble-type {

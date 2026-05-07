@@ -4,10 +4,13 @@ import com.xcw.aiagentbackend.app.MentorApp;
 import com.xcw.aiagentbackend.model.chat.MentorMode;
 import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.regex.Matcher;
@@ -17,6 +20,9 @@ import java.util.regex.Pattern;
 @Service
 public class MentorChatService {
     private static final String EXPORT_TIP = "\n\n> 可点击右上角“导出最近计划PDF”一键导出本次计划。";
+    private static final String MCP_TIMEOUT_HINT = "- **真实配图检索超时**：本次图片检索超过等待时间，已先返回文字规划。可稍后重试“每个地点配图”。";
+    private static final String MCP_ERROR_HINT = "- **真实配图检索失败**：本次未获取到可靠图片，建议稍后重试或先仅生成文字版路线。";
+    private static final String PLANNER_STREAM_ERROR_HINT = "## 五、复盘与下一步\n- **系统提示**：规划流式输出中断，建议缩小问题范围后重试。";
     private static final Pattern BULLET_PREFIX = Pattern.compile("^[-*•]\\s*");
     private static final Pattern ORDERED_PREFIX = Pattern.compile("^\\d+[\\.)、]\\s*");
     private static final Pattern MARKDOWN_IMAGE = Pattern.compile("!\\[[^\\]]*]\\([^)]*\\)");
@@ -28,6 +34,9 @@ public class MentorChatService {
 
     @Resource
     private MentorApp mentorApp;
+
+    @Value("${mentor.mcp-timeout-seconds:90}")
+    private int mcpTimeoutSeconds;
 
     public Flux<String> chatByStream(MentorMode mode, String message, String chatId) {
         if (mode == MentorMode.PLANNER) {
@@ -46,7 +55,7 @@ public class MentorChatService {
                     chatId,
                     preview(message));
             String mcpPrompt = (poiImageIntent || realImageSearchIntent) ? buildPoiImageSearchPrompt(message) : message;
-            String result = mentorApp.doChatWithMcp(mcpPrompt, chatId);
+            String result = safeDoMcpChat(mcpPrompt, chatId);
             String normalized = normalizePoiListOutput(result, poiImageIntent || realImageSearchIntent);
             return Flux.fromArray(normalized.split("\n"));
         }
@@ -61,18 +70,29 @@ public class MentorChatService {
     }
 
     private Flux<String> chatPlannerWithAutoImage(String message, String chatId) {
-        Flux<String> planStream = mentorApp.doPlannerPlanByStream(message, chatId);
+        Flux<String> planStream = mentorApp.doPlannerPlanByStream(message, chatId)
+                .timeout(Duration.ofSeconds(mcpTimeoutSeconds))
+                .onErrorResume(error -> {
+                    log.warn("planner_stream_failed chatId={} reason={}", chatId, error.toString());
+                    return Flux.just(PLANNER_STREAM_ERROR_HINT);
+                });
         boolean poiImageIntent = shouldUseMcpForPoiImage(message);
         boolean realImageSearchIntent = shouldUseRealImageSearchByDefault(message);
         if (shouldUseImageTools(message) && (poiImageIntent || realImageSearchIntent)) {
             log.info("mentor_route guard=block_planner_local_image_tool mode={} chatId={} messagePreview={}",
                     MentorMode.PLANNER, chatId, preview(message));
         }
-        if (poiImageIntent || realImageSearchIntent) {
-            log.info("mentor_route route=planner_then_mcp mode={} reason=poi_image chatId={} messagePreview={}",
-                    MentorMode.PLANNER, chatId, preview(message));
+        if (poiImageIntent || realImageSearchIntent || shouldAutoAttachPlannerPlaceImages(message)) {
+            log.info("mentor_route route=planner_then_mcp mode={} reason={} chatId={} messagePreview={}",
+                    MentorMode.PLANNER,
+                    poiImageIntent ? "poi_image" : (realImageSearchIntent ? "real_image_search" : "planner_place_images"),
+                    chatId,
+                    preview(message));
             String poiImagePrompt = buildPoiImageSearchPrompt(message);
-            Mono<String> poiImageResult = Mono.fromSupplier(() -> mentorApp.doChatWithMcp(poiImagePrompt, chatId));
+            Mono<String> poiImageResult = Mono.fromCallable(() -> safeDoMcpChat(poiImagePrompt, chatId))
+                    .subscribeOn(Schedulers.boundedElastic())
+                    .timeout(Duration.ofSeconds(mcpTimeoutSeconds))
+                    .onErrorReturn(MCP_ERROR_HINT);
             return appendExportTip(planStream.concatWith(
                     poiImageResult.flatMapMany(result -> Flux.fromArray(normalizePoiListOutput(result, true).split("\n")))
             ));
@@ -87,6 +107,19 @@ public class MentorChatService {
         String imagePrompt = buildAutoImagePrompt(message);
         Mono<String> imageResult = Mono.fromSupplier(() -> mentorApp.doChatWithTools(imagePrompt, chatId));
         return appendExportTip(planStream.concatWith(imageResult.flatMapMany(result -> Flux.fromArray(result.split("\n")))));
+    }
+
+    private String safeDoMcpChat(String prompt, String chatId) {
+        try {
+            return Mono.fromCallable(() -> mentorApp.doChatWithMcp(prompt, chatId))
+                    .subscribeOn(Schedulers.boundedElastic())
+                    .timeout(Duration.ofSeconds(mcpTimeoutSeconds))
+                    .onErrorReturn(MCP_TIMEOUT_HINT)
+                    .block();
+        } catch (Exception e) {
+            log.warn("mcp_chat_failed chatId={} reason={}", chatId, e.toString());
+            return MCP_ERROR_HINT;
+        }
     }
 
     private boolean shouldUseMcpTools(String message) {
@@ -115,6 +148,22 @@ public class MentorChatService {
                 || text.contains("图片")
                 || text.contains("照片");
         return hasPoiContext && wantsImages;
+    }
+
+    /**
+     * 规划模式下默认追加地点实景图检索（SearchAPI / image-search MCP），无需用户额外输入「配图」。
+     */
+    private boolean shouldAutoAttachPlannerPlaceImages(String message) {
+        if (message == null || message.isBlank()) {
+            return false;
+        }
+        String t = message.toLowerCase();
+        return t.contains("行程")
+                || t.contains("攻略")
+                || t.contains("约会")
+                || t.contains("规划")
+                || t.contains("景点")
+                || t.contains("地点");
     }
 
     private boolean shouldUseImageTools(String message) {

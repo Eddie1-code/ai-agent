@@ -192,7 +192,8 @@ public class AiController {
                     .build());
             streamSessionManager.cleanup(reqId);
             cleanupPlannerState(reqId);
-            emitter.completeWithError(error);
+            // SSE 场景下已通过 error 事件把失败告知前端，避免再抛给 MVC 触发二次异常序列化。
+            emitter.complete();
         }, () -> {
             boolean cancelled = streamSessionManager.isCancelled(reqId);
             if (username != null && assistantBuffer.length() > 0) {

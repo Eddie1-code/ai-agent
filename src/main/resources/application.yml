@@ -50,6 +50,9 @@ app:
       - demo-local-key
     max-requests-per-minute: 120
 
+mentor:
+  mcp-timeout-seconds: ${MENTOR_MCP_TIMEOUT_SECONDS:90}
+
 tencent:
   aiart:
     enabled: ${TENCENT_AIART_ENABLED:false}

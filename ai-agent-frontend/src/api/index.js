@@ -26,7 +26,9 @@ export const setAuthToken = (token) => {
 
 export const getAuthToken = () => localStorage.getItem(AUTH_TOKEN_KEY) || ''
 export const clearAuthToken = () => localStorage.removeItem(AUTH_TOKEN_KEY)
-const isJwtOnlyMode = () => localStorage.getItem(AUTH_MODE_KEY) === AUTH_MODE_JWT_ONLY
+
+/** 退出 JWT 独占模式：无 token 时仍允许用开发 API Key 访问（否则 jwt_only + 空 token 会不发任何凭证 → 401） */
+export const clearJwtOnlyMode = () => localStorage.removeItem(AUTH_MODE_KEY)
 
 request.interceptors.request.use((config) => {
   const token = getAuthToken()
@@ -34,13 +36,24 @@ request.interceptors.request.use((config) => {
   if (token) {
     config.headers.Authorization = `Bearer ${token}`
     delete config.headers['X-API-Key']
-  } else if (!isJwtOnlyMode()) {
-    config.headers['X-API-Key'] = API_KEY
   } else {
-    delete config.headers['X-API-Key']
+    config.headers['X-API-Key'] = API_KEY
+    delete config.headers.Authorization
   }
   return config
 })
+
+request.interceptors.response.use(
+  (res) => res,
+  async (error) => {
+    const status = error?.response?.status
+    if (status === 401 && getAuthToken()) {
+      clearAuthToken()
+      clearJwtOnlyMode()
+    }
+    return Promise.reject(error)
+  }
+)
 
 // 封装SSE连接
 export const connectSSE = (url, params, onMessage, onError) => {
@@ -83,7 +96,7 @@ export const streamMentorChat = (payload, onMessage, onError) => {
   const ssePayload = { ...payload, requestId }
   if (token) {
     ssePayload.token = token
-  } else if (!isJwtOnlyMode()) {
+  } else {
     ssePayload.apiKey = API_KEY
   }
   const eventSource = connectSSE('/ai/mentor/chat/sse', ssePayload, onMessage, onError)
@@ -177,5 +190,6 @@ export default {
   changePassword,
   setAuthToken,
   getAuthToken,
-  clearAuthToken
+  clearAuthToken,
+  clearJwtOnlyMode
 } 
