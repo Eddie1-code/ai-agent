@@ -13,6 +13,7 @@ public class ChatSessionRecord {
     private String title;
     private String mode;
     private Boolean archived;
+    private Boolean pinned;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
 }

@@ -1,0 +1,15 @@
+# 复制为 application-stdio.yml 后填入真实密钥（该文件已在 .gitignore 中，不会提交到 GitHub）
+spring:
+  ai:
+    mcp:
+      server:
+        name: image-search-mcp-server
+        version: 0.0.1
+        type: SYNC
+        stdio: true
+  main:
+    web-application-type: none
+    banner-mode: off
+
+pexels:
+  api-key: ${PEXELS_API_KEY:your-pexels-api-key-here}

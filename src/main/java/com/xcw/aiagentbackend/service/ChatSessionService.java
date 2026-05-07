@@ -36,6 +36,7 @@ public class ChatSessionService {
                   title VARCHAR(128) NOT NULL,
                   mode VARCHAR(16) NOT NULL,
                   archived TINYINT(1) NOT NULL DEFAULT 0,
+                  pinned TINYINT(1) NOT NULL DEFAULT 0,
                   created_at DATETIME NOT NULL,
                   updated_at DATETIME NOT NULL,
                   INDEX idx_chat_session_user_updated (user_id, updated_at)
@@ -90,6 +91,9 @@ public class ChatSessionService {
             jdbcTemplate.execute("ALTER TABLE chat_message ADD COLUMN created_at DATETIME NULL AFTER metadata_json");
             jdbcTemplate.execute("UPDATE chat_message SET created_at = NOW() WHERE created_at IS NULL");
         }
+        if (!hasColumn("chat_session", "pinned")) {
+            jdbcTemplate.execute("ALTER TABLE chat_session ADD COLUMN pinned TINYINT(1) NOT NULL DEFAULT 0 AFTER archived");
+        }
     }
 
     private boolean hasColumn(String tableName, String columnName) {
@@ -108,10 +112,10 @@ public class ChatSessionService {
     public List<ChatSessionRecord> listSessions(String username) {
         UserAccount user = authService.getCurrentUser(username);
         return jdbcTemplate.query("""
-                        SELECT id, user_id, title, mode, archived, created_at, updated_at
+                        SELECT id, user_id, title, mode, archived, pinned, created_at, updated_at
                         FROM chat_session
                         WHERE user_id = ?
-                        ORDER BY updated_at DESC
+                        ORDER BY pinned DESC, updated_at DESC
                         """,
                 this::mapSession,
                 user.getId());
@@ -149,17 +153,18 @@ public class ChatSessionService {
         return getOwnedSessionOrThrow(user.getId(), sessionId);
     }
 
-    public ChatSessionRecord updateSession(String username, String sessionId, String title, Boolean archived) {
+    public ChatSessionRecord updateSession(String username, String sessionId, String title, Boolean archived, Boolean pinned) {
         UserAccount user = authService.getCurrentUser(username);
         ChatSessionRecord old = getOwnedSessionOrThrow(user.getId(), sessionId);
         String nextTitle = (title == null || title.isBlank()) ? old.getTitle() : title.trim();
         boolean nextArchived = archived == null ? old.getArchived() : archived;
+        boolean nextPinned = pinned == null ? Boolean.TRUE.equals(old.getPinned()) : pinned;
         LocalDateTime now = LocalDateTime.now();
         jdbcTemplate.update("""
-                        UPDATE chat_session SET title = ?, archived = ?, updated_at = ?
+                        UPDATE chat_session SET title = ?, archived = ?, pinned = ?, updated_at = ?
                         WHERE id = ? AND user_id = ?
                         """,
-                nextTitle, nextArchived ? 1 : 0, now, sessionId, user.getId());
+                nextTitle, nextArchived ? 1 : 0, nextPinned ? 1 : 0, now, sessionId, user.getId());
         return getOwnedSessionOrThrow(user.getId(), sessionId);
     }
 
@@ -274,7 +279,7 @@ public class ChatSessionService {
 
     private Optional<ChatSessionRecord> findByIdAndUserId(String sessionId, Long userId) {
         return jdbcTemplate.query("""
-                        SELECT id, user_id, title, mode, archived, created_at, updated_at
+                        SELECT id, user_id, title, mode, archived, pinned, created_at, updated_at
                         FROM chat_session
                         WHERE id = ? AND user_id = ?
                         """,
@@ -302,6 +307,7 @@ public class ChatSessionService {
                 .title(rs.getString("title"))
                 .mode(rs.getString("mode"))
                 .archived(rs.getInt("archived") == 1)
+                .pinned(rs.getInt("pinned") == 1)
                 .createdAt(rs.getTimestamp("created_at").toLocalDateTime())
                 .updatedAt(rs.getTimestamp("updated_at").toLocalDateTime())
                 .build();

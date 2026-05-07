@@ -6,6 +6,7 @@ import cn.hutool.json.JSONObject;
 import cn.hutool.json.JSONUtil;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.util.HashMap;
@@ -16,51 +17,44 @@ import java.util.stream.Collectors;
 @Service
 public class ImageSearchTool {
 
-    // 替换为你的 Pexels API 密钥（需从官网申请）
-    private static final String API_KEY = "Ow3C4gnbIYfXFm1ouT3QtR7P6LmYzLWuE5Rwmmjj96PX0i0rEVjQsDTx";
-
-    // Pexels 常规搜索接口（请以文档为准）
     private static final String API_URL = "https://api.pexels.com/v1/search";
 
-    @Tool(description = "search image from web")
-    public String searchImage(@ToolParam(description = "Search query keyword") String query) {
+    @Value("${pexels.api-key:}")
+    private String apiKey;
+
+    @Tool(description = "从 Pexels 搜索真实图片")
+    public String searchImage(@ToolParam(description = "搜索关键词") String query) {
         try {
             return String.join(",", searchMediumImages(query));
         } catch (Exception e) {
-            return "Error search image: " + e.getMessage();
+            return "图片检索失败：" + e.getMessage();
         }
     }
 
-    /**
-     * 搜索中等尺寸的图片列表
-     *
-     * @param query
-     * @return
-     */
     public List<String> searchMediumImages(String query) {
-        // 设置请求头（包含API密钥）
+        if (StrUtil.isBlank(query) || StrUtil.isBlank(apiKey)) {
+            return List.of();
+        }
         Map<String, String> headers = new HashMap<>();
-        headers.put("Authorization", API_KEY);
+        headers.put("Authorization", apiKey);
 
-        // 设置请求参数（仅包含query，可根据文档补充page、per_page等参数）
         Map<String, Object> params = new HashMap<>();
-        params.put("query", query);
+        params.put("query", query.trim());
+        params.put("per_page", 3);
 
-        // 发送 GET 请求
         String response = HttpUtil.createGet(API_URL)
-        .addHeaders(headers)
-        .form(params)
-        .execute()
-        .body();
+                .addHeaders(headers)
+                .form(params)
+                .execute()
+                .body();
 
-        // 解析响应JSON（假设响应结构包含"photos"数组，每个元素包含"medium"字段）
         return JSONUtil.parseObj(response)
-        .getJSONArray("photos")
-        .stream()
-        .map(photoObj -> (JSONObject) photoObj)
-        .map(photoObj -> photoObj.getJSONObject("src"))
-        .map(photo -> photo.getStr("medium"))
-        .filter(StrUtil::isNotBlank)
-        .collect(Collectors.toList());
+                .getJSONArray("photos")
+                .stream()
+                .map(photoObj -> (JSONObject) photoObj)
+                .map(photoObj -> photoObj.getJSONObject("src"))
+                .map(photo -> photo.getStr("medium"))
+                .filter(StrUtil::isNotBlank)
+                .collect(Collectors.toList());
     }
 }

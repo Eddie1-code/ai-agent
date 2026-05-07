@@ -51,7 +51,8 @@ public class ChatSessionController {
                 String.valueOf(authentication.getPrincipal()),
                 sessionId,
                 request.getTitle(),
-                request.getArchived()
+                request.getArchived(),
+                request.getPinned()
         ));
     }
 

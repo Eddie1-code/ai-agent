@@ -12,8 +12,9 @@ import com.itextpdf.layout.Style;
 import com.itextpdf.layout.Document;
 import com.itextpdf.layout.element.Image;
 import com.itextpdf.layout.element.Paragraph;
-import com.itextpdf.io.image.ImageDataFactory;
 import com.xcw.aiagentbackend.constant.FileConstant;
+import com.xcw.aiagentbackend.util.PlanMarkdownNormalizer;
+import com.itextpdf.io.image.ImageDataFactory;
 import com.xcw.aiagentbackend.model.chat.ChatMessageRecord;
 import com.xcw.aiagentbackend.model.chat.ExportRecord;
 import jakarta.annotation.Resource;
@@ -73,37 +74,42 @@ public class PlanExportService {
                     .addStyle(metaStyle)
                     .setMarginBottom(14));
 
-            List<String> lines = normalizeStructuredText(content == null ? "" : content);
+            String normalizedContent = PlanMarkdownNormalizer.normalizeForPdf(content == null ? "" : content);
+            List<String> lines = normalizeStructuredText(normalizedContent);
             for (String line : lines) {
                 if (line.isBlank()) {
                     document.add(new Paragraph(" ").setMarginBottom(2));
                     continue;
                 }
+                String displayLine = PlanMarkdownNormalizer.stripMarkdownSyntax(line);
+                if (displayLine.isBlank()) {
+                    continue;
+                }
                 if (line.startsWith("### ")) {
-                    document.add(new Paragraph(line.substring(4)).addStyle(h3Style).setMarginTop(6).setMarginBottom(4));
+                    document.add(new Paragraph(displayLine).addStyle(h3Style).setMarginTop(6).setMarginBottom(4));
                     continue;
                 }
                 if (line.startsWith("## ")) {
-                    document.add(new Paragraph(line.substring(3)).addStyle(h2Style).setMarginTop(8).setMarginBottom(5));
+                    document.add(new Paragraph(displayLine).addStyle(h2Style).setMarginTop(8).setMarginBottom(5));
                     continue;
                 }
                 if (line.startsWith("# ")) {
-                    document.add(new Paragraph(line.substring(2)).addStyle(h1Style).setMarginTop(10).setMarginBottom(6));
+                    document.add(new Paragraph(displayLine).addStyle(h1Style).setMarginTop(10).setMarginBottom(6));
                     continue;
                 }
-                if (isStepTitle(line)) {
-                    document.add(new Paragraph(line).addStyle(stepStyle).setMarginTop(8).setMarginBottom(6));
+                if (isStepTitle(displayLine)) {
+                    document.add(new Paragraph(displayLine).addStyle(stepStyle).setMarginTop(8).setMarginBottom(6));
                     continue;
                 }
-                if (isOrderedLine(line)) {
-                    document.add(new Paragraph(line).addStyle(orderedStyle).setMarginBottom(4));
+                if (isOrderedLine(displayLine)) {
+                    document.add(new Paragraph(displayLine).addStyle(orderedStyle).setMarginBottom(4));
                     continue;
                 }
-                if (isBulletLine(line)) {
-                    document.add(new Paragraph(toPdfBullet(line)).addStyle(bulletStyle).setMarginBottom(4));
+                if (isBulletLine(displayLine)) {
+                    document.add(new Paragraph(toPdfBullet(displayLine)).addStyle(bulletStyle).setMarginBottom(4));
                     continue;
                 }
-                document.add(new Paragraph(line).addStyle(bodyStyle).setMarginBottom(4));
+                document.add(new Paragraph(displayLine).addStyle(bodyStyle).setMarginBottom(4));
             }
 
             List<String> images = extractImagesFromMetadata(metadataJson);
@@ -224,7 +230,7 @@ public class PlanExportService {
     }
 
     private boolean isMarkdownHeading(String line) {
-        return line.startsWith("# ");
+        return PlanMarkdownNormalizer.isMarkdownHeading(line);
     }
 
     private boolean isBulletLine(String line) {
@@ -254,7 +260,9 @@ public class PlanExportService {
         List<String> candidates = List.of(
                 "C:/Windows/Fonts/msyh.ttc",
                 "C:/Windows/Fonts/simsun.ttc",
-                "C:/Windows/Fonts/simhei.ttf"
+                "C:/Windows/Fonts/simhei.ttf",
+                "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+                "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc"
         );
         for (String path : candidates) {
             if (FileUtil.exist(path)) {
@@ -262,7 +270,6 @@ public class PlanExportService {
                 return PdfFontFactory.createFont(fontPath, PdfEncodings.IDENTITY_H);
             }
         }
-        // 最后兜底（无中文保证），避免导出流程直接失败
-        return PdfFontFactory.createFont();
+        return PdfFontFactory.createFont("STSongStd-Light", "UniGB-UCS2-H");
     }
 }

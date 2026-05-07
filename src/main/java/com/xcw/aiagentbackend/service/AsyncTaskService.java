@@ -72,13 +72,15 @@ public class AsyncTaskService {
     private void executeTask(String taskId, TaskSubmitRequest request) {
         updateStatus(taskId, "running", null, null);
         try {
-            String output = mentorChatService.chatByStream(
+            String output = mentorChatService.chatEventsByStream(
                             MentorMode.fromValue(request.getMode()),
                             request.getMessage(),
                             request.getChatId()
                     )
+                    .filter(event -> "answer".equals(event.getEventType()))
+                    .map(event -> event.getContent() == null ? "" : event.getContent())
                     .collectList()
-                    .map(list -> String.join("\n", list))
+                    .map(list -> String.join("", list))
                     .block();
             updateStatus(taskId, "succeeded", output, null);
         } catch (Exception e) {
