@@ -1,7 +1,11 @@
 <template>
   <div class="chat-panel">
     <div class="messages" ref="messagesContainer">
-      <div v-for="(msg, index) in displayMessages" :key="index" class="row">
+      <div v-if="showEmptyState" class="empty-state">
+        <h2 class="empty-state__title">{{ emptyStateTitle }}</h2>
+        <p class="empty-state__hint">{{ emptyStateHint }}</p>
+      </div>
+      <div v-for="(msg, index) in visibleMessages" :key="index" class="row">
         <div v-if="!msg.isUser" class="bubble-wrap bubble-wrap--ai" :class="[msg.type]">
           <span class="avatar">AI</span>
           <div class="bubble">
@@ -46,7 +50,7 @@
                 </a>
               </div>
             </template>
-            <p v-if="connectionStatus === 'connecting' && index === displayMessages.length - 1">
+            <p v-if="connectionStatus === 'connecting' && index === visibleMessages.length - 1">
               <span class="typing">▋</span>
             </p>
             <small>{{ formatTime(msg.time) }}</small>
@@ -58,7 +62,12 @@
             <small>{{ formatTime(msg.time) }}</small>
           </div>
           <span class="avatar avatar--user" :title="userDisplayName">
-            <img v-if="userAvatarUrl" :src="userAvatarUrl" alt="用户头像" />
+            <img
+              v-if="resolvedAvatarUrl"
+              :src="resolvedAvatarUrl"
+              alt="用户头像"
+              @error="avatarLoadFailed = true"
+            />
             <template v-else>{{ userInitial }}</template>
           </span>
         </div>
@@ -73,35 +82,56 @@
       </div>
     </div>
 
-    <div class="composer">
-      <textarea
-        v-model="inputMessage"
-        @keydown.enter.prevent="sendMessage"
-        :placeholder="inputPlaceholder"
-        :disabled="connectionStatus === 'connecting'"
-      />
-      <button class="btn-pill btn-pill--primary" :disabled="connectionStatus === 'connecting' || !inputMessage.trim()" @click="sendMessage">发送</button>
-      <button v-if="canStop" class="btn-pill" @click="emit('stop-message')">{{ stopText }}</button>
+    <div class="composer glass-composer">
+      <div class="composer__inner">
+        <textarea
+          v-model="inputMessage"
+          @keydown.enter.prevent="sendMessage"
+          :placeholder="inputPlaceholder"
+          :disabled="connectionStatus === 'connecting' || inputDisabled"
+          rows="1"
+        />
+        <div class="composer__actions">
+          <button v-if="canStop" class="composer__stop" type="button" @click="emit('stop-message')">{{ stopText }}</button>
+          <button
+            class="composer__send"
+            type="button"
+            :disabled="connectionStatus === 'connecting' || inputDisabled || !inputMessage.trim()"
+            @click="sendMessage"
+            aria-label="发送"
+          >
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path d="M12 19V5M12 5L6 11M12 5L18 11" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+          </button>
+        </div>
+      </div>
     </div>
   </div>
 </template>
 
 <script setup>
 import { computed, ref, onMounted, nextTick, watch } from 'vue'
+import { isValidAvatarSrc } from '../utils/avatar'
 
 const props = defineProps({
   messages: { type: Array, default: () => [] },
   connectionStatus: { type: String, default: 'disconnected' },
+  inputDisabled: { type: Boolean, default: false },
   canStop: { type: Boolean, default: false },
   inputPlaceholder: { type: String, default: '请输入你的问题...' },
   stopText: { type: String, default: '停止' },
   userAvatarUrl: { type: String, default: '' },
-  userDisplayName: { type: String, default: 'ME' }
+  userDisplayName: { type: String, default: 'ME' },
+  showEmptyState: { type: Boolean, default: false },
+  emptyStateTitle: { type: String, default: '' },
+  emptyStateHint: { type: String, default: '' }
 })
 
 const emit = defineEmits(['send-message', 'stop-message'])
 const inputMessage = ref('')
 const messagesContainer = ref(null)
+const avatarLoadFailed = ref(false)
 const IMAGE_URL_FALLBACK_HINT = '当前无法提供可验证的外链图片URL，请改为本地上传或让我输出拍摄/配图提示词'
 
 const displayMessages = computed(() => {
@@ -120,9 +150,20 @@ const displayMessages = computed(() => {
   return grouped
 })
 
+const visibleMessages = computed(() => (props.showEmptyState ? [] : displayMessages.value))
+
 const userInitial = computed(() => {
   const source = String(props.userDisplayName || 'ME').trim()
   return source ? source.slice(0, 1).toUpperCase() : 'M'
+})
+
+const resolvedAvatarUrl = computed(() => {
+  if (avatarLoadFailed.value) return ''
+  return isValidAvatarSrc(props.userAvatarUrl) ? props.userAvatarUrl : ''
+})
+
+watch(() => props.userAvatarUrl, () => {
+  avatarLoadFailed.value = false
 })
 
 const sendMessage = () => {
@@ -683,7 +724,14 @@ const normalizeStructuredText = (content = '') => {
 
 const scrollToBottom = async () => {
   await nextTick()
-  if (messagesContainer.value) messagesContainer.value.scrollTop = messagesContainer.value.scrollHeight
+  const main = messagesContainer.value?.closest('.chat-main')
+  if (main) {
+    main.scrollTop = main.scrollHeight
+    return
+  }
+  if (messagesContainer.value) {
+    messagesContainer.value.scrollTop = messagesContainer.value.scrollHeight
+  }
 }
 
 watch(() => displayMessages.value.length, scrollToBottom)
@@ -693,17 +741,46 @@ onMounted(scrollToBottom)
 
 <style scoped>
 .chat-panel {
-  border: 1px solid var(--line-soft);
-  border-radius: 24px;
-  background: var(--panel-strong);
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
   overflow: hidden;
 }
 
+.empty-state {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 48px 24px;
+  min-height: 200px;
+}
+
+.empty-state__title {
+  font-size: clamp(1.5rem, 3vw, 2rem);
+  font-weight: 700;
+  color: var(--ink);
+  margin-bottom: 12px;
+}
+
+.empty-state__hint {
+  max-width: 420px;
+  font-size: 0.95rem;
+  line-height: 1.6;
+  color: var(--ink-muted);
+}
+
 .messages {
-  min-height: 56vh;
-  max-height: 62vh;
-  overflow: auto;
-  padding: 16px 14px;
+  flex: 1;
+  min-height: 0;
+  overflow: visible;
+  padding: 16px 0;
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -1062,6 +1139,12 @@ p {
   padding-right: 4px;
 }
 
+.thinking-block .rich-content.glass-scrollbar,
+.messages.glass-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.14) transparent;
+}
+
 small {
   display: block;
   margin-top: 5px;
@@ -1124,30 +1207,91 @@ small {
   100% { transform: translateX(270%); }
 }
 
-.composer {
-  border-top: 1px solid var(--line-soft);
-  padding: 12px;
-  display: flex;
-  gap: 8px;
-  align-items: flex-end;
+.composer.glass-composer {
+  position: sticky;
+  bottom: 0;
+  z-index: 10;
+  flex-shrink: 0;
+  padding: 8px 0 8px;
+  border: 0;
+  background:
+    linear-gradient(to top, rgba(3, 3, 3, 0.92) 55%, rgba(3, 3, 3, 0));
 }
 
+.composer__inner {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: 24px;
+  border: 1px solid var(--glass-border);
+  background:
+    var(--glass-highlight),
+    var(--glass-bg);
+  box-shadow: var(--glass-shadow);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+}
 
-textarea {
+.composer__inner textarea {
   flex: 1;
-  min-height: 48px;
+  min-height: 24px;
   max-height: 120px;
   resize: none;
-  border: 1px solid var(--line-soft);
-  border-radius: 14px;
-  background: rgba(255, 255, 255, 0.06);
+  border: 0;
+  background: transparent;
   color: var(--ink);
-  padding: 12px;
+  padding: 4px 0;
+  font-size: 0.95rem;
+  line-height: 1.5;
 }
 
-textarea:focus {
+.composer__inner textarea:focus {
   outline: none;
-  border-color: var(--cyan);
+}
+
+.composer__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.composer__stop {
+  border: 1px solid var(--glass-border);
+  border-radius: 999px;
+  padding: 8px 14px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--ink-soft);
+  font-size: 0.82rem;
+  cursor: pointer;
+}
+
+.composer__send {
+  width: 40px;
+  height: 40px;
+  border: 0;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  background: linear-gradient(135deg, #2f9cff, #48f5ff);
+  color: #fff;
+  cursor: pointer;
+  transition: transform 0.18s ease, opacity 0.18s ease;
+}
+
+.composer__send svg {
+  width: 20px;
+  height: 20px;
+}
+
+.composer__send:hover:not(:disabled) {
+  transform: scale(1.05);
+}
+
+.composer__send:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 button:disabled {
@@ -1156,18 +1300,8 @@ button:disabled {
 }
 
 @media (max-width: 760px) {
-  .messages {
-    min-height: 60vh;
-    padding: 12px 10px;
-  }
   .bubble-wrap {
     max-width: 92%;
-  }
-  .composer {
-    flex-wrap: wrap;
-  }
-  .composer .btn-pill {
-    width: 100%;
   }
 }
 </style>

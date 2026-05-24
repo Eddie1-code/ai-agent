@@ -6,4 +6,5 @@ import lombok.Data;
 public class UpdateChatSessionRequest {
     private String title;
     private Boolean archived;
+    private Boolean pinned;
 }
