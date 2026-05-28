@@ -22,6 +22,9 @@ public class AuthService {
     @Resource
     private JdbcTemplate jdbcTemplate;
 
+    @Resource
+    private CaptchaStore captchaStore;
+
     private final PasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
 
     @PostConstruct
@@ -31,17 +34,29 @@ public class AuthService {
                   id BIGINT PRIMARY KEY AUTO_INCREMENT,
                   username VARCHAR(128) UNIQUE NOT NULL,
                   nickname VARCHAR(128),
-                  avatar_url VARCHAR(255),
+                  avatar_url TEXT,
                   password_hash VARCHAR(255) NOT NULL,
                   created_at DATETIME NOT NULL,
                   updated_at DATETIME NOT NULL
                 )
                 """);
+        // 兼容旧表：VARCHAR(255) → TEXT，避免 base64 头像被截断
+        try {
+            jdbcTemplate.execute("ALTER TABLE user_account MODIFY COLUMN avatar_url TEXT");
+        } catch (Exception ignored) {
+            // 已经是 TEXT 则忽略
+        }
     }
 
-    public UserAccount register(String username, String password) {
+    public UserAccount register(String username, String password, String captchaKey, String captchaCode) {
         if (username == null || username.isBlank() || password == null || password.isBlank()) {
             throw new BusinessException(ErrorCode.PARAMS_ERROR, "用户名或密码不能为空");
+        }
+        if (captchaKey == null || captchaKey.isBlank() || captchaCode == null || captchaCode.isBlank()) {
+            throw new BusinessException(ErrorCode.PARAMS_ERROR, "验证码不能为空");
+        }
+        if (!captchaStore.verify(captchaKey, captchaCode)) {
+            throw new BusinessException(ErrorCode.PARAMS_ERROR, "验证码错误或已过期");
         }
         if (findByUsername(username).isPresent()) {
             throw new BusinessException(ErrorCode.OPERATION_ERROR, "用户名已存在");
@@ -97,6 +112,26 @@ public class AuthService {
         jdbcTemplate.update("UPDATE user_account SET nickname = ?, avatar_url = ?, updated_at = ? WHERE username = ?",
                 nextNickname, nextAvatarUrl, now, username);
         return getCurrentUser(username);
+    }
+
+    public void resetPassword(String username, String captchaKey, String captchaCode, String newPassword) {
+        if (username == null || username.isBlank()) {
+            throw new BusinessException(ErrorCode.PARAMS_ERROR, "用户名不能为空");
+        }
+        if (captchaKey == null || captchaKey.isBlank() || captchaCode == null || captchaCode.isBlank()) {
+            throw new BusinessException(ErrorCode.PARAMS_ERROR, "验证码不能为空");
+        }
+        if (newPassword == null || newPassword.isBlank()) {
+            throw new BusinessException(ErrorCode.PARAMS_ERROR, "新密码不能为空");
+        }
+        if (!captchaStore.verify(captchaKey, captchaCode)) {
+            throw new BusinessException(ErrorCode.PARAMS_ERROR, "验证码错误或已过期");
+        }
+        UserAccount user = findByUsername(username)
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND_ERROR, "用户不存在"));
+        String hash = passwordEncoder.encode(newPassword);
+        jdbcTemplate.update("UPDATE user_account SET password_hash = ?, updated_at = ? WHERE username = ?",
+                hash, LocalDateTime.now(), user.getUsername());
     }
 
     public void changePassword(String username, String oldPassword, String newPassword) {

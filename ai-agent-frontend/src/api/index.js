@@ -158,6 +158,16 @@ export const register = async (payload) => {
   return data
 }
 
+export const getCaptcha = async () => {
+  const { data } = await request.get('/auth/captcha')
+  return data
+}
+
+export const resetPassword = async (payload) => {
+  const { data } = await request.post('/auth/reset-password', payload)
+  return data
+}
+
 export const getProfile = async () => {
   const { data } = await request.get('/user/me')
   return data
@@ -185,6 +195,8 @@ export default {
   downloadExportPdf,
   login,
   register,
+  getCaptcha,
+  resetPassword,
   getProfile,
   updateProfile,
   changePassword,

@@ -1,23 +1,23 @@
 <template>
   <div class="auth-page section-shell">
     <section class="panel auth-card">
-      <h1>注册账号</h1>
-      <p class="auth-tip">创建账号后即可使用多会话和个人中心功能。</p>
-      <form @submit.prevent="handleRegister" class="auth-form">
+      <h1>找回密码</h1>
+      <p class="auth-tip">输入用户名并通过验证码后即可重置密码。</p>
+      <form @submit.prevent="handleReset" class="auth-form">
         <input v-model.trim="form.username" placeholder="用户名" required />
-        <input v-model="form.password" type="password" placeholder="密码（至少 6 位）" required />
         <div class="captcha-row">
           <input v-model.trim="form.captchaCode" placeholder="验证码" required class="captcha-input" />
           <img v-if="captchaImage" :src="captchaImage" alt="验证码" class="captcha-img" @click="refreshCaptcha" title="点击刷新验证码" />
         </div>
+        <input v-model="form.newPassword" type="password" placeholder="新密码（至少 6 位）" required />
         <button class="btn-pill btn-pill--primary" :disabled="loading">
-          {{ loading ? '注册中...' : '注册并登录' }}
+          {{ loading ? '重置中...' : '重置密码' }}
         </button>
       </form>
+      <p v-if="success" class="auth-success">{{ success }}</p>
       <p v-if="error" class="auth-error">{{ error }}</p>
       <p class="auth-link">
-        已有账号？
-        <router-link to="/login">去登录</router-link>
+        <router-link to="/login">返回登录</router-link>
       </p>
     </section>
   </div>
@@ -26,17 +26,18 @@
 <script setup>
 import { reactive, ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { register, setAuthToken, getCaptcha } from '../api'
+import { resetPassword, getCaptcha } from '../api'
 
 const router = useRouter()
 const loading = ref(false)
 const error = ref('')
+const success = ref('')
 const captchaKey = ref('')
 const captchaImage = ref('')
 const form = reactive({
   username: '',
-  password: '',
-  captchaCode: ''
+  captchaCode: '',
+  newPassword: ''
 })
 
 const refreshCaptcha = async () => {
@@ -53,28 +54,27 @@ const refreshCaptcha = async () => {
 
 onMounted(refreshCaptcha)
 
-const handleRegister = async () => {
+const handleReset = async () => {
   loading.value = true
   error.value = ''
+  success.value = ''
   try {
-    if (form.password.length < 6) {
-      throw new Error('密码至少 6 位')
+    if (form.newPassword.length < 6) {
+      throw new Error('新密码至少 6 位')
     }
     if (!form.captchaCode) {
       throw new Error('请输入验证码')
     }
-    const res = await register({
+    await resetPassword({
       username: form.username,
-      password: form.password,
       captchaKey: captchaKey.value,
-      captchaCode: form.captchaCode
+      captchaCode: form.captchaCode,
+      newPassword: form.newPassword
     })
-    const token = res?.data?.token
-    if (!token) throw new Error('注册成功但未获取到 token')
-    setAuthToken(token)
-    router.replace('/chat')
+    success.value = '密码重置成功，即将跳转到登录页...'
+    setTimeout(() => router.replace('/login'), 2000)
   } catch (e) {
-    error.value = e?.response?.data?.message || e?.message || '注册失败'
+    error.value = e?.response?.data?.message || e?.message || '重置失败'
     refreshCaptcha()
   } finally {
     loading.value = false
@@ -107,5 +107,6 @@ input {
   flex-shrink: 0;
 }
 .auth-error { margin-top: 10px; color: #ff8ea1; }
+.auth-success { margin-top: 10px; color: #7fe7ff; }
 .auth-link { margin-top: 12px; color: var(--ink-muted); }
 </style>

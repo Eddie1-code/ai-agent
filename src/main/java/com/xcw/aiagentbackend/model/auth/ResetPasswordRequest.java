@@ -3,9 +3,9 @@ package com.xcw.aiagentbackend.model.auth;
 import lombok.Data;
 
 @Data
-public class RegisterRequest {
+public class ResetPasswordRequest {
     private String username;
-    private String password;
     private String captchaKey;
     private String captchaCode;
+    private String newPassword;
 }

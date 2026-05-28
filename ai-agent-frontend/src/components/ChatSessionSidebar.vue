@@ -118,7 +118,7 @@
       </button>
     </div>
 
-    <div v-if="userDisplayName && sidebarMode !== 'hidden'" class="session-sidebar__user">
+    <div v-if="userDisplayName && sidebarMode !== 'hidden'" class="session-sidebar__user" @click="router.push('/profile')">
       <span class="session-sidebar__avatar">
         <img v-if="resolvedAvatarUrl" :src="resolvedAvatarUrl" alt="" @error="avatarLoadFailed = true" />
         <template v-else>{{ userInitial }}</template>
@@ -159,8 +159,11 @@
 
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import { brandCopy } from '../constants/copy'
 import { isValidAvatarSrc } from '../utils/avatar'
+
+const router = useRouter()
 
 const props = defineProps({
   sessions: { type: Array, default: () => [] },
@@ -664,6 +667,12 @@ onBeforeUnmount(() => {
   background: rgba(255, 255, 255, 0.04);
   min-width: 0;
   overflow: hidden;
+  cursor: pointer;
+  transition: background 0.2s ease;
+}
+
+.session-sidebar__user:hover {
+  background: rgba(255, 255, 255, 0.1);
 }
 
 .session-sidebar--rail .session-sidebar__user {

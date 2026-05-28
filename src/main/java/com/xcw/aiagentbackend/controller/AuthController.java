@@ -6,6 +6,7 @@ import com.xcw.aiagentbackend.config.ApiSecurityProperties;
 import com.xcw.aiagentbackend.model.auth.AuthTokenResponse;
 import com.xcw.aiagentbackend.model.auth.LoginRequest;
 import com.xcw.aiagentbackend.model.auth.RegisterRequest;
+import com.xcw.aiagentbackend.model.auth.ResetPasswordRequest;
 import com.xcw.aiagentbackend.model.auth.UserAccount;
 import com.xcw.aiagentbackend.service.AuthService;
 import com.xcw.aiagentbackend.service.JwtService;
@@ -31,7 +32,8 @@ public class AuthController {
 
     @PostMapping("/register")
     public BaseResponse<AuthTokenResponse> register(@RequestBody RegisterRequest request) {
-        UserAccount user = authService.register(request.getUsername(), request.getPassword());
+        UserAccount user = authService.register(request.getUsername(), request.getPassword(),
+                request.getCaptchaKey(), request.getCaptchaCode());
         String token = jwtService.generateToken(user.getUsername());
         return ResultUtils.success(AuthTokenResponse.builder()
                 .token(token)
@@ -49,6 +51,13 @@ public class AuthController {
                 .expireInSeconds(apiSecurityProperties.getJwtExpireSeconds())
                 .username(user.getUsername())
                 .build());
+    }
+
+    @PostMapping("/reset-password")
+    public BaseResponse<Void> resetPassword(@RequestBody ResetPasswordRequest request) {
+        authService.resetPassword(request.getUsername(), request.getCaptchaKey(),
+                request.getCaptchaCode(), request.getNewPassword());
+        return ResultUtils.success(null);
     }
 
     @GetMapping("/me")

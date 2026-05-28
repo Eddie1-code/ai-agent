@@ -37,6 +37,9 @@
           还没有账号？
           <router-link to="/register">去注册</router-link>
         </p>
+        <p class="auth-link" style="margin-top: 6px;">
+          <router-link to="/forgot-password" style="font-size: 13px; color: var(--ink-muted);">忘记密码？</router-link>
+        </p>
       </section>
     </div>
     <div class="auth-noise" aria-hidden="true"></div>
