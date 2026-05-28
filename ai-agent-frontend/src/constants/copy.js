@@ -90,7 +90,8 @@ export const brandCopy = {
     sessionGroupWeek: '7 天内',
     sessionGroupMonth: '30 天内',
     emptyStateTitle: '开始与 AI 导师对话',
-    emptyStateHint: '告诉我你目前最想解决的一件事，我们一起把它变成可执行的下一步。'
+    emptyStateHint: '告诉我你目前最想解决的一件事，我们一起把它变成可执行的下一步。',
+    exportPlanTip: '规划完成后，可点击右上角「导出最近计划PDF」一键导出本次计划。'
   },
   footer: {
     slogan: '让每一次选择，都有方向；让每一步行动，都能落地。',

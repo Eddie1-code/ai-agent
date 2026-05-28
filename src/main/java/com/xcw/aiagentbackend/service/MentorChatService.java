@@ -2,6 +2,8 @@ package com.xcw.aiagentbackend.service;
 
 import com.xcw.aiagentbackend.app.MentorApp;
 import com.xcw.aiagentbackend.model.chat.MentorMode;
+import com.xcw.aiagentbackend.model.chat.StreamEvent;
+import com.xcw.aiagentbackend.util.PlanMarkdownNormalizer;
 import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -12,6 +14,7 @@ import reactor.core.scheduler.Schedulers;
 
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -19,10 +22,9 @@ import java.util.regex.Pattern;
 @Slf4j
 @Service
 public class MentorChatService {
-    private static final String EXPORT_TIP = "\n\n> 可点击右上角“导出最近计划PDF”一键导出本次计划。";
-    private static final String MCP_TIMEOUT_HINT = "- **真实配图检索超时**：本次图片检索超过等待时间，已先返回文字规划。可稍后重试“每个地点配图”。";
-    private static final String MCP_ERROR_HINT = "- **真实配图检索失败**：本次未获取到可靠图片，建议稍后重试或先仅生成文字版路线。";
-    private static final String PLANNER_STREAM_ERROR_HINT = "## 五、复盘与下一步\n- **系统提示**：规划流式输出中断，建议缩小问题范围后重试。";
+    private static final String MCP_TIMEOUT_HINT = "真实配图检索超时：本次图片检索超过等待时间，已先返回文字规划。可稍后重试“每个地点配图”。";
+    private static final String MCP_ERROR_HINT = "真实配图检索失败：本次未获取到可靠图片，建议稍后重试或先仅生成文字版路线。";
+    private static final String PLANNER_STREAM_ERROR_HINT = "## 五、复盘与下一步\n- 系统提示：规划流式输出中断，建议缩小问题范围后重试。";
     private static final Pattern BULLET_PREFIX = Pattern.compile("^[-*•]\\s*");
     private static final Pattern ORDERED_PREFIX = Pattern.compile("^\\d+[\\.)、]\\s*");
     private static final Pattern MARKDOWN_IMAGE = Pattern.compile("!\\[[^\\]]*]\\([^)]*\\)");
@@ -35,91 +37,202 @@ public class MentorChatService {
     @Resource
     private MentorApp mentorApp;
 
+    @Resource
+    private PexelsImageSearchService pexelsImageSearchService;
+
+    @Resource
+    private ImageKeywordExtractor imageKeywordExtractor;
+
     @Value("${mentor.mcp-timeout-seconds:90}")
     private int mcpTimeoutSeconds;
 
-    public Flux<String> chatByStream(MentorMode mode, String message, String chatId) {
+    public Flux<StreamEvent> chatEventsByStream(MentorMode mode, String message, String chatId) {
         if (mode == MentorMode.PLANNER) {
             return chatPlannerWithAutoImage(message, chatId);
         }
-        boolean poiImageIntent = shouldUseMcpForPoiImage(message);
-        boolean realImageSearchIntent = shouldUseRealImageSearchByDefault(message);
-        if (shouldUseImageTools(message) && (poiImageIntent || realImageSearchIntent)) {
-            log.info("mentor_route guard=block_local_image_tool mode={} chatId={} messagePreview={}",
-                    mode, chatId, preview(message));
-        }
-        if (shouldUseMcpTools(message) || poiImageIntent || realImageSearchIntent) {
-            log.info("mentor_route route=mcp mode={} reason={} chatId={} messagePreview={}",
-                    mode,
-                    poiImageIntent ? "poi_image" : (realImageSearchIntent ? "real_image_search" : "map_query"),
-                    chatId,
-                    preview(message));
-            String mcpPrompt = (poiImageIntent || realImageSearchIntent) ? buildPoiImageSearchPrompt(message) : message;
-            String result = safeDoMcpChat(mcpPrompt, chatId);
-            String normalized = normalizePoiListOutput(result, poiImageIntent || realImageSearchIntent);
-            return Flux.fromArray(normalized.split("\n"));
-        }
-        if (shouldUseGeneratedImageFallback(message)) {
-            log.info("mentor_route route=local_image_tool mode={} reason=image_request chatId={} messagePreview={}",
-                    mode, chatId, preview(message));
-            String result = mentorApp.doChatWithTools(message, chatId);
-            return Flux.fromArray(result.split("\n"));
-        }
-        log.info("mentor_route route=plain_stream mode={} chatId={} messagePreview={}", mode, chatId, preview(message));
-        return mentorApp.doChatByStream(message, chatId);
+        return chatCoachEvents(message, chatId);
     }
 
-    private Flux<String> chatPlannerWithAutoImage(String message, String chatId) {
-        Flux<String> planStream = mentorApp.doPlannerPlanByStream(message, chatId)
+    private Flux<StreamEvent> chatCoachEvents(String message, String chatId) {
+        boolean poiImageIntent = shouldUseMcpForPoiImage(message);
+        boolean realImageSearchIntent = shouldUseRealImageSearch(message);
+        if (shouldUseMcpTools(message) && !poiImageIntent && !realImageSearchIntent) {
+            log.info("mentor_route route=mcp_map mode={} chatId={} messagePreview={}",
+                    MentorMode.COACH, chatId, preview(message));
+            return mapMcpEvents(message, chatId);
+        }
+        if (poiImageIntent || realImageSearchIntent) {
+            log.info("mentor_route route=pexels_image mode={} reason={} chatId={} messagePreview={}",
+                    MentorMode.COACH,
+                    poiImageIntent ? "poi_image" : "real_image_search",
+                    chatId,
+                    preview(message));
+            return imageSearchEvents(message, null, chatId, resolveMaxImages(message));
+        }
+        if (shouldUseGeneratedImageFallback(message)) {
+            log.info("mentor_route route=local_image_tool mode={} chatId={} messagePreview={}",
+                    MentorMode.COACH, chatId, preview(message));
+            return generatedImageEvents(buildAutoImagePrompt(message), chatId);
+        }
+        log.info("mentor_route route=plain_stream mode={} chatId={} messagePreview={}",
+                MentorMode.COACH, chatId, preview(message));
+        return plainAnswerStream(mentorApp.doChatByStream(message, chatId));
+    }
+
+    private Flux<StreamEvent> chatPlannerWithAutoImage(String message, String chatId) {
+        Flux<StreamEvent> thinking = Flux.just(
+                streamEvent("thinking", "正在理解你的需求，准备生成可执行计划…")
+        );
+        Flux<StreamEvent> planStream = mentorApp.doPlannerPlanByStream(message, chatId)
                 .timeout(Duration.ofSeconds(mcpTimeoutSeconds))
+                .map(chunk -> streamEvent("answer", chunk))
                 .onErrorResume(error -> {
                     log.warn("planner_stream_failed chatId={} reason={}", chatId, error.toString());
-                    return Flux.just(PLANNER_STREAM_ERROR_HINT);
+                    return Flux.just(streamEvent("answer", PLANNER_STREAM_ERROR_HINT));
                 });
+
+        StringBuilder planBuffer = new StringBuilder();
+        Flux<StreamEvent> planWithBuffer = planStream.doOnNext(event -> {
+            if (event.getContent() != null) {
+                planBuffer.append(event.getContent());
+            }
+        });
+
         boolean poiImageIntent = shouldUseMcpForPoiImage(message);
-        boolean realImageSearchIntent = shouldUseRealImageSearchByDefault(message);
-        if (shouldUseImageTools(message) && (poiImageIntent || realImageSearchIntent)) {
-            log.info("mentor_route guard=block_planner_local_image_tool mode={} chatId={} messagePreview={}",
-                    MentorMode.PLANNER, chatId, preview(message));
-        }
+        boolean realImageSearchIntent = shouldUseRealImageSearch(message);
         if (poiImageIntent || realImageSearchIntent || shouldAutoAttachPlannerPlaceImages(message)) {
-            log.info("mentor_route route=planner_then_mcp mode={} reason={} chatId={} messagePreview={}",
+            log.info("mentor_route route=planner_then_pexels mode={} reason={} chatId={} messagePreview={}",
                     MentorMode.PLANNER,
                     poiImageIntent ? "poi_image" : (realImageSearchIntent ? "real_image_search" : "planner_place_images"),
                     chatId,
                     preview(message));
-            String poiImagePrompt = buildPoiImageSearchPrompt(message);
-            Mono<String> poiImageResult = Mono.fromCallable(() -> safeDoMcpChat(poiImagePrompt, chatId))
-                    .subscribeOn(Schedulers.boundedElastic())
-                    .timeout(Duration.ofSeconds(mcpTimeoutSeconds))
-                    .onErrorReturn(MCP_ERROR_HINT);
-            return appendExportTip(planStream.concatWith(
-                    poiImageResult.flatMapMany(result -> Flux.fromArray(normalizePoiListOutput(result, true).split("\n")))
-            ));
+            Flux<StreamEvent> imageEvents = Flux.defer(() ->
+                    imageSearchEvents(message, planBuffer.toString(), chatId, resolveMaxImages(message)));
+            return thinking.concatWith(planWithBuffer).concatWith(imageEvents);
         }
-        if (!shouldUseGeneratedImageFallback(message)) {
-            log.info("mentor_route route=planner_only mode={} chatId={} messagePreview={}",
-                    MentorMode.PLANNER, chatId, preview(message));
-            return appendExportTip(planStream);
+        if (shouldUseGeneratedImageFallback(message)) {
+            Flux<StreamEvent> imageEvents = generatedImageEvents(buildAutoImagePrompt(message), chatId);
+            return thinking.concatWith(planWithBuffer).concatWith(imageEvents);
         }
-        log.info("mentor_route route=planner_then_local_image_tool mode={} reason=image_request chatId={} messagePreview={}",
-                MentorMode.PLANNER, chatId, preview(message));
-        String imagePrompt = buildAutoImagePrompt(message);
-        Mono<String> imageResult = Mono.fromSupplier(() -> mentorApp.doChatWithTools(imagePrompt, chatId));
-        return appendExportTip(planStream.concatWith(imageResult.flatMapMany(result -> Flux.fromArray(result.split("\n")))));
+        return thinking.concatWith(planWithBuffer);
+    }
+
+    private Flux<StreamEvent> imageSearchEvents(String userMessage, String planText, String chatId, int maxImages) {
+        return Flux.concat(
+                Flux.just(streamEvent("thinking", "正在提取地点关键词并检索真实配图…")),
+                Mono.fromCallable(() -> buildImageSearchEvents(userMessage, planText, maxImages))
+                        .subscribeOn(Schedulers.boundedElastic())
+                        .timeout(Duration.ofSeconds(mcpTimeoutSeconds))
+                        .flatMapMany(Flux::fromIterable)
+                        .onErrorResume(error -> {
+                            log.warn("pexels_image_search_failed chatId={} reason={}", chatId, error.toString());
+                            return Flux.just(
+                                    streamEvent("tool_result", MCP_ERROR_HINT),
+                                    streamEvent("answer", "\n\n" + MCP_ERROR_HINT)
+                            );
+                        })
+        );
+    }
+
+    private List<StreamEvent> buildImageSearchEvents(String userMessage, String planText, int maxImages) {
+        List<StreamEvent> events = new ArrayList<>();
+        List<String> places = imageKeywordExtractor.extractPlaces(userMessage, planText, maxImages);
+        if (places.isEmpty()) {
+            events.add(streamEvent("tool_result", MCP_ERROR_HINT));
+            events.add(streamEvent("answer", "\n\n" + MCP_ERROR_HINT));
+            return events;
+        }
+
+        List<PexelsImageSearchService.PlaceImageResult> results =
+                pexelsImageSearchService.searchForPlaces(places, maxImages);
+        LinkedHashSet<String> imageUrls = new LinkedHashSet<>();
+        StringBuilder answer = new StringBuilder("\n\n### 地点配图\n");
+        for (PexelsImageSearchService.PlaceImageResult result : results) {
+            events.add(streamEvent("tool_call", "正在检索配图", "searchImage", result.query()));
+            if (result.imageUrl() != null && !result.imageUrl().isBlank()) {
+                imageUrls.add(result.imageUrl());
+                events.add(streamEvent("tool_result", "已检索到 " + result.placeLabel() + " 的实景图", null, null,
+                        new String[]{result.imageUrl()}));
+                answer.append("- ").append(result.placeLabel()).append("（实景参考）    ")
+                        .append(result.description()).append("\n");
+            } else {
+                events.add(streamEvent("tool_result", result.placeLabel() + "：未检索到可靠图片"));
+                answer.append("- ").append(result.placeLabel()).append("    未检索到可靠图片\n");
+            }
+        }
+
+        StreamEvent answerEvent = streamEvent("answer", answer.toString());
+        if (!imageUrls.isEmpty()) {
+            answerEvent.setImages(imageUrls.toArray(String[]::new));
+        }
+        events.add(answerEvent);
+        return events;
+    }
+
+    private Flux<StreamEvent> mapMcpEvents(String message, String chatId) {
+        return Flux.concat(
+                Flux.just(
+                        streamEvent("thinking", "正在调用地图服务检索位置与路线…"),
+                        streamEvent("tool_call", "正在调用高德地图", "amap-maps", preview(message))
+                ),
+                Mono.fromCallable(() -> safeDoMcpChat(message, chatId))
+                        .subscribeOn(Schedulers.boundedElastic())
+                        .timeout(Duration.ofSeconds(mcpTimeoutSeconds))
+                        .flatMapMany(result -> Flux.fromArray(result.split("\n"))
+                                .map(line -> streamEvent("answer", line + "\n")))
+                        .concatWith(Flux.just(streamEvent("tool_result", "地图检索完成")))
+                        .onErrorResume(error -> Flux.just(
+                                streamEvent("tool_result", MCP_ERROR_HINT),
+                                streamEvent("answer", MCP_ERROR_HINT)
+                        ))
+        );
+    }
+
+    private Flux<StreamEvent> generatedImageEvents(String prompt, String chatId) {
+        return Flux.concat(
+                Flux.just(
+                        streamEvent("thinking", "正在调用 AI 生图工具…"),
+                        streamEvent("tool_call", "正在生成配图", "generateImage", preview(prompt))
+                ),
+                Mono.fromCallable(() -> mentorApp.doChatWithTools(prompt, chatId))
+                        .subscribeOn(Schedulers.boundedElastic())
+                        .flatMapMany(result -> Flux.fromArray(result.split("\n"))
+                                .map(line -> streamEvent("answer", line + "\n")))
+                        .concatWith(Flux.just(streamEvent("tool_result", "生图任务完成")))
+        );
+    }
+
+    private Flux<StreamEvent> plainAnswerStream(Flux<String> stream) {
+        return stream.map(chunk -> streamEvent("answer", chunk));
     }
 
     private String safeDoMcpChat(String prompt, String chatId) {
         try {
-            return Mono.fromCallable(() -> mentorApp.doChatWithMcp(prompt, chatId))
-                    .subscribeOn(Schedulers.boundedElastic())
-                    .timeout(Duration.ofSeconds(mcpTimeoutSeconds))
-                    .onErrorReturn(MCP_TIMEOUT_HINT)
-                    .block();
+            return mentorApp.doChatWithMcp(prompt, chatId);
         } catch (Exception e) {
             log.warn("mcp_chat_failed chatId={} reason={}", chatId, e.toString());
             return MCP_ERROR_HINT;
         }
+    }
+
+    private StreamEvent streamEvent(String eventType, String content) {
+        return streamEvent(eventType, content, null, null, null);
+    }
+
+    private StreamEvent streamEvent(String eventType, String content, String toolName, String toolArgs) {
+        return streamEvent(eventType, content, toolName, toolArgs, null);
+    }
+
+    private StreamEvent streamEvent(String eventType, String content, String toolName, String toolArgs, String[] images) {
+        return StreamEvent.builder()
+                .eventType(eventType)
+                .content(content == null ? "" : content)
+                .toolName(toolName)
+                .toolArgs(toolArgs)
+                .toolResult("tool_result".equals(eventType) ? content : null)
+                .images(images)
+                .done(false)
+                .build();
     }
 
     private boolean shouldUseMcpTools(String message) {
@@ -127,14 +240,9 @@ public class MentorChatService {
             return false;
         }
         String text = message.toLowerCase();
-        return text.contains("地图")
-                || text.contains("路线")
-                || text.contains("附近");
+        return text.contains("地图") || text.contains("路线") || text.contains("附近");
     }
 
-    /**
-     * 地点类配图需求优先走 MCP（高德位置 + 图片搜索），避免走本地通用生图工具。
-     */
     private boolean shouldUseMcpForPoiImage(String message) {
         if (message == null) {
             return false;
@@ -143,16 +251,14 @@ public class MentorChatService {
         boolean hasPoiContext = text.contains("地点")
                 || text.contains("景点")
                 || text.contains("路线")
-                || text.contains("上面每个");
-        boolean wantsImages = text.contains("配图")
-                || text.contains("图片")
-                || text.contains("照片");
+                || text.contains("上面每个")
+                || text.contains("地方")
+                || text.contains("推荐")
+                || text.contains("放空");
+        boolean wantsImages = wantsRealImages(message);
         return hasPoiContext && wantsImages;
     }
 
-    /**
-     * 规划模式下默认追加地点实景图检索（SearchAPI / image-search MCP），无需用户额外输入「配图」。
-     */
     private boolean shouldAutoAttachPlannerPlaceImages(String message) {
         if (message == null || message.isBlank()) {
             return false;
@@ -167,37 +273,35 @@ public class MentorChatService {
     }
 
     private boolean shouldUseImageTools(String message) {
+        return wantsRealImages(message)
+                || shouldUseGeneratedImageFallback(message);
+    }
+
+    private boolean wantsRealImages(String message) {
         if (message == null) {
             return false;
         }
         String text = message.toLowerCase();
         return text.contains("配图")
-                || text.contains("封面图")
-                || text.contains("海报")
-                || text.contains("插画")
-                || text.contains("生成图片")
+                || text.contains("图片")
+                || text.contains("照片")
+                || text.contains("配上")
+                || text.contains("来几张")
+                || text.contains("带图")
+                || text.contains("有图")
                 || text.contains("图文并茂");
     }
 
-    /**
-     * 你的产品策略：大多数图片需求优先真实图检索（SearchAPI/MCP）。
-     */
-    private boolean shouldUseRealImageSearchByDefault(String message) {
+    private boolean shouldUseRealImageSearch(String message) {
         if (message == null) {
             return false;
         }
-        String text = message.toLowerCase();
-        boolean asksImage = shouldUseImageTools(message);
-        if (!asksImage) {
+        if (!wantsRealImages(message)) {
             return false;
         }
-        // 明确要求创意生图时，不走默认真实图检索。
         return !shouldUseGeneratedImageFallback(message);
     }
 
-    /**
-     * 仅在用户明确要求“创意生成/示意图”时，才启用腾讯生图兜底。
-     */
     private boolean shouldUseGeneratedImageFallback(String message) {
         if (message == null) {
             return false;
@@ -215,6 +319,13 @@ public class MentorChatService {
                 || text.contains("生成一张图");
     }
 
+    private int resolveMaxImages(String message) {
+        if (isMoreImagesRequested(message)) {
+            return 12;
+        }
+        return 6;
+    }
+
     private String buildAutoImagePrompt(String userMessage) {
         return """
                 请基于用户需求自动生成1张配图，必须调用图片生成工具。
@@ -228,27 +339,10 @@ public class MentorChatService {
                 """ + userMessage;
     }
 
-    private String buildPoiImageSearchPrompt(String userMessage) {
-        return """
-                你必须优先调用 MCP 能力完成“真实地点配图”，禁止使用 AI 生图工具替代真实照片。
-                要求：
-                1) 先做地点确认：如需地理位置可调用高德 MCP；
-                2) 图片来源必须优先调用 image-search-mcp-server 的 searchImage（SearchAPI 真实图片）；
-                3) 文字输出必须是无序列表（每个地点单独一行），格式严格为：
-                   - 地点名（场景标签）    简短描述（20~40字）
-                   示例：
-                   - 金光华广场（西门夜景）    罗湖核心商圈地标，暖光玻璃幕墙+地面灯带，适合初见合影与轻快起步。
-                4) 不要在正文里输出任何 URL、Markdown 链接或“链接折叠”提示；
-                5) 图片链接可以在工具调用结果中返回给系统用于下方图片卡片渲染，但不要写进正文文案；
-                6) 如果某地点暂时检索不到图片，明确说明“未检索到可靠图片”，不要编造链接。
-                7) 不要输出工具原始调试文本。
-                8) 图片数量控制：默认每个地点最多1张，总图片数不超过地点数，且最多6张；只有用户明确提出“更多图片/多来几张/每个地点多图”时，才可适度增加到最多12张。
-
-                用户原始需求：
-                """ + userMessage;
-    }
-
     private boolean isMoreImagesRequested(String message) {
+        if (message == null) {
+            return false;
+        }
         String text = message.toLowerCase();
         return text.contains("更多图片")
                 || text.contains("多来几张")
@@ -256,115 +350,6 @@ public class MentorChatService {
                 || text.contains("每个地点多图")
                 || text.contains("每个地方多图")
                 || text.contains("多一点图片");
-    }
-
-    private String normalizePoiListOutput(String text, boolean forceListFormat) {
-        if (text == null || text.isBlank() || !forceListFormat) {
-            return text;
-        }
-
-        String cleaned = cleanForPoiFormatting(text);
-        if (cleaned.isEmpty()) {
-            return text;
-        }
-
-        List<String> extractedByHeader = extractEntriesByPlaceHeader(cleaned);
-        if (!extractedByHeader.isEmpty()) {
-            return String.join("\n", extractedByHeader);
-        }
-
-        String[] lines = cleaned.split("\\R");
-        List<String> normalizedLines = new ArrayList<>();
-        for (String rawLine : lines) {
-            String line = sanitizeText(rawLine);
-            if (line.isEmpty()) {
-                continue;
-            }
-            line = BULLET_PREFIX.matcher(line).replaceFirst("");
-            line = ORDERED_PREFIX.matcher(line).replaceFirst("");
-            line = line.replaceAll("\\s+", " ").trim();
-            if (line.isEmpty()) {
-                continue;
-            }
-            Matcher cnBracketMatcher = PLACE_DESC_WITH_CN_BRACKET.matcher(line);
-            if (cnBracketMatcher.matches()) {
-                line = cnBracketMatcher.group(1).trim() + " " + cnBracketMatcher.group(2).trim();
-            } else {
-                Matcher enBracketMatcher = PLACE_DESC_WITH_EN_BRACKET.matcher(line);
-                if (enBracketMatcher.matches()) {
-                    line = enBracketMatcher.group(1).trim() + " " + enBracketMatcher.group(2).trim();
-                }
-            }
-            normalizedLines.add("- " + line);
-        }
-        return normalizedLines.isEmpty() ? text : String.join("\n", normalizedLines);
-    }
-
-    private List<String> extractEntriesByPlaceHeader(String cleaned) {
-        Matcher matcher = PLACE_HEADER.matcher(cleaned);
-        List<Integer> starts = new ArrayList<>();
-        List<Integer> ends = new ArrayList<>();
-        List<String> headers = new ArrayList<>();
-        while (matcher.find()) {
-            String header = sanitizeText(matcher.group(1));
-            if (header.isEmpty()) {
-                continue;
-            }
-            starts.add(matcher.start());
-            ends.add(matcher.end());
-            headers.add(header);
-        }
-        if (headers.isEmpty()) {
-            return List.of();
-        }
-        List<String> result = new ArrayList<>();
-        for (int i = 0; i < headers.size(); i++) {
-            int descStart = ends.get(i);
-            int descEnd = (i + 1 < headers.size()) ? starts.get(i + 1) : cleaned.length();
-            if (descStart > descEnd) {
-                continue;
-            }
-            String desc = sanitizeText(cleaned.substring(descStart, descEnd));
-            if (desc.isEmpty()) {
-                continue;
-            }
-            result.add("- " + headers.get(i) + " " + desc);
-        }
-        return result;
-    }
-
-    private String cleanForPoiFormatting(String text) {
-        String cleaned = text;
-        cleaned = MARKDOWN_IMAGE.matcher(cleaned).replaceAll(" ");
-        cleaned = MARKDOWN_LINK.matcher(cleaned).replaceAll("$1");
-        cleaned = URL.matcher(cleaned).replaceAll(" ");
-        cleaned = cleaned.replaceAll("[•●◦▪▫◆◇■□★☆※→←↔↑↓]+", " ");
-        cleaned = cleaned.replaceAll("[\\uD83C-\\uDBFF\\uDC00-\\uDFFF]", " ");
-        cleaned = cleaned.replaceAll("\\s*\\n\\s*", "\n");
-        cleaned = cleaned.replaceAll("[ \\t]+", " ");
-        return sanitizeText(cleaned);
-    }
-
-    private String sanitizeText(String text) {
-        if (text == null || text.isBlank()) {
-            return "";
-        }
-        StringBuilder builder = new StringBuilder(text.length());
-        for (int i = 0; i < text.length(); i++) {
-            char ch = text.charAt(i);
-            if (Character.isLetterOrDigit(ch)
-                    || Character.isWhitespace(ch)
-                    || Character.UnicodeScript.of(ch) == Character.UnicodeScript.HAN
-                    || "（）()，。！？、：；《》“”\"'·+-/&".indexOf(ch) >= 0) {
-                builder.append(ch);
-            }
-        }
-        String normalized = builder.toString().replaceAll("\\s+", " ").trim();
-        return normalized.replaceAll("^[-*•\\s]+", "").trim();
-    }
-
-    private Flux<String> appendExportTip(Flux<String> stream) {
-        return stream.concatWithValues(EXPORT_TIP);
     }
 
     private String preview(String text) {

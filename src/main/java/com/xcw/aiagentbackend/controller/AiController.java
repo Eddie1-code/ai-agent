@@ -21,6 +21,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
+import com.xcw.aiagentbackend.util.PlanMarkdownNormalizer;
 import reactor.core.publisher.Flux;
 
 import java.io.IOException;
@@ -134,18 +135,25 @@ public class AiController {
                 .done(false)
                 .build());
 
-        Flux<String> stream = mentorChatService.chatByStream(mentorMode, request.getMessage(), chatId);
-        streamSessionManager.setSubscription(reqId, stream.subscribe(chunk -> {
+        Flux<StreamEvent> stream = mentorChatService.chatEventsByStream(mentorMode, request.getMessage(), chatId);
+        streamSessionManager.setSubscription(reqId, stream.subscribe(event -> {
             if (!streamSessionManager.isCancelled(reqId)) {
-                String eventType = resolveEventType(mentorMode, reqId, chunk);
-                String displayChunk = sanitizeChunkForDisplay(mentorMode, eventType, chunk);
-                if (displayChunk != null && !displayChunk.isBlank()) {
+                String eventType = event.getEventType() == null ? "answer" : event.getEventType();
+                String rawChunk = event.getContent();
+                String displayChunk = sanitizeChunkForDisplay(mentorMode, eventType, rawChunk);
+                displayChunk = PlanMarkdownNormalizer.filterEnglishPromptNoise(displayChunk);
+                if ("answer".equals(eventType) && displayChunk != null && !displayChunk.isBlank()) {
                     assistantBuffer.append(displayChunk);
                 }
-                String toolName = null;
-                String toolArgs = null;
-                String toolResult = null;
-                String[] images = limitImagesForRequest(extractImageUrls(chunk), generatedImages, maxPreviewImages);
+                String toolName = event.getToolName();
+                String toolArgs = event.getToolArgs();
+                String toolResult = event.getToolResult();
+                String[] eventImages = event.getImages();
+                String[] images = limitImagesForRequest(
+                        mergeImageCandidates(eventImages, extractImageUrls(rawChunk)),
+                        generatedImages,
+                        maxPreviewImages
+                );
                 if (images != null && images.length > 0) {
                     for (String image : images) {
                         if (image != null && !image.isBlank()) {
@@ -153,9 +161,8 @@ public class AiController {
                         }
                     }
                 }
-                if ("tool_call".equals(eventType)) {
-                    toolName = extractToolName(chunk);
-                    toolArgs = truncateText(extractToolArgs(chunk), 320);
+                if ("tool_call".equals(eventType) && toolName != null) {
+                    toolArgs = truncateText(toolArgs, 320);
                 } else if ("tool_result".equals(eventType)) {
                     toolResult = displayChunk;
                 }
@@ -198,12 +205,13 @@ public class AiController {
             boolean cancelled = streamSessionManager.isCancelled(reqId);
             if (username != null && assistantBuffer.length() > 0) {
                 try {
+                    String normalizedAnswer = PlanMarkdownNormalizer.normalizeForStorage(assistantBuffer.toString().trim());
                     chatSessionService.appendMessage(
                             username,
                             chatId,
                             "assistant",
                             cancelled ? "cancelled" : "answer",
-                            assistantBuffer.toString().trim(),
+                            normalizedAnswer,
                             buildAssistantMetadataJson(generatedImages)
                     );
                 } catch (Exception ignored) {
@@ -362,6 +370,7 @@ public class AiController {
         text = replacePotentialBrokenImageLinks(text);
         text = stripImageLinkArtifacts(text);
         text = stripNoisySymbolLines(text);
+        text = PlanMarkdownNormalizer.stripOrphanHashLines(text);
         text = foldLongImageLinks(text);
         return truncateText(text, MAX_EVENT_TEXT_LENGTH);
     }
@@ -747,6 +756,28 @@ public class AiController {
         repeatChunkCountByRequestId.remove(requestId);
     }
 
+    private String[] mergeImageCandidates(String[] primary, String[] secondary) {
+        List<String> merged = new ArrayList<>();
+        if (primary != null) {
+            for (String item : primary) {
+                if (item != null && !item.isBlank()) {
+                    merged.add(item);
+                }
+            }
+        }
+        if (secondary != null) {
+            for (String item : secondary) {
+                if (item != null && !item.isBlank() && !merged.contains(item)) {
+                    merged.add(item);
+                }
+            }
+        }
+        if (merged.isEmpty()) {
+            return null;
+        }
+        return merged.toArray(String[]::new);
+    }
+
     private String buildAssistantMetadataJson(List<String> images) {
         if (images == null || images.isEmpty()) {
             return null;
@@ -758,8 +789,11 @@ public class AiController {
         if (normalized.isEmpty()) {
             return null;
         }
+        String provider = normalized.stream().anyMatch(url -> url.toLowerCase().contains("pexels.com"))
+                ? "pexels"
+                : "tencent-aiart";
         return JSONUtil.toJsonStr(Map.of(
-                "provider", "tencent-aiart",
+                "provider", provider,
                 "images", normalized
         ));
     }

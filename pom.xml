@@ -132,10 +132,13 @@
             <artifactId>spring-ai-pgvector-store</artifactId>
             <version>1.0.0-M6</version>
         </dependency>
+        <!-- Redis 暂未使用，保留备用 -->
+        <!--
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-data-redis</artifactId>
         </dependency>
+        -->
         <dependency>
             <groupId>org.jsoup</groupId>
             <artifactId>jsoup</artifactId>
@@ -158,7 +161,6 @@
             <groupId>com.itextpdf</groupId>
             <artifactId>font-asian</artifactId>
             <version>9.1.0</version>
-            <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>org.springframework.ai</groupId>

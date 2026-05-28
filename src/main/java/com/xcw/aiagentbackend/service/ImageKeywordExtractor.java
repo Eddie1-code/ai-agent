@@ -94,8 +94,10 @@ public class ImageKeywordExtractor {
                 if (item == null) {
                     continue;
                 }
-                addPlace(new LinkedHashSet<>(), String.valueOf(item));
-                result.add(String.valueOf(item).trim());
+                String value = String.valueOf(item).trim();
+                if (value.length() >= 2 && value.length() <= 30) {
+                    result.add(value);
+                }
                 if (result.size() >= maxCount) {
                     break;
                 }

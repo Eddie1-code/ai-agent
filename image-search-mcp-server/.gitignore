@@ -31,3 +31,7 @@ build/
 
 ### VS Code ###
 .vscode/
+
+### Secrets / local overrides ###
+src/main/resources/application-stdio.yml
+

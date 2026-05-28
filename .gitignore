@@ -37,6 +37,8 @@ src/main/java/com/xcw/aiagentbackend/constant/TestApiKey.java
 src/main/resources/application-local.yml
 src/main/resources/application-prod.yml
 src/main/resources/mcp-servers.json
+src/main/resources/mcp-servers-prod.json
+image-search-mcp-server/src/main/resources/application-stdio.yml
 
 tmp
 

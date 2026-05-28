@@ -130,6 +130,9 @@ public class MentorApp {
     private ToolCallbackProvider toolCallbackProvider;
 
     public String doChatWithMcp(String message, String chatId) {
+        if (toolCallbackProvider == null) {
+            return "地图 MCP 未启用，暂无法调用高德服务。请直接描述你的地点需求，我会基于文字为你规划。";
+        }
         ChatResponse response = chatClient
                 .prompt()
                 .user(message)

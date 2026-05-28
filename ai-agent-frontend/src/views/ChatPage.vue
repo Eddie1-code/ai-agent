@@ -76,11 +76,12 @@
             </button>
           </div>
 
-          <button class="btn-pill export-btn" type="button" @click="exportLatestPlan">导出最近计划PDF</button>
+          <button v-if="mode === 'planner'" class="btn-pill export-btn" type="button" @click="exportLatestPlan">导出最近计划PDF</button>
         </header>
 
         <main class="chat-main glass-scrollbar">
           <div class="chat-center">
+            <p v-if="mode === 'planner' && showExportTip" class="export-tip glass-panel">{{ brandCopy.chat.exportPlanTip }}</p>
             <p v-if="toastMessage" class="session-toast glass-panel">{{ toastMessage }}</p>
             <p v-if="isBackgroundStreaming" class="stream-hint glass-panel">{{ brandCopy.chat.streamBackgroundHint }}</p>
             <ChatPanel
@@ -188,6 +189,15 @@ const inputPlaceholder = computed(() =>
   isBackgroundStreaming.value ? brandCopy.chat.streamBackgroundHint : brandCopy.chat.inputPlaceholder
 )
 const showEmptyState = computed(() => !messages.value.some(item => item.isUser))
+const showExportTip = computed(() =>
+  mode.value === 'planner'
+  && messages.value.some(item => !item.isUser && item.type !== 'thinking' && item.type !== 'tool_call' && item.type !== 'tool_result')
+)
+
+const hasImageIntentInSession = (sessionMessages = []) =>
+  sessionMessages.some(item =>
+    item.isUser && /配图|图片|照片|配上|来几张|带图|有图/.test(item.content || '')
+  )
 
 const goBack = () => router.push('/')
 
@@ -310,15 +320,18 @@ const finalizeStreamForSession = (sessionId, { appendMessage } = {}) => {
 
 const sendMessage = (message) => {
   if (!activeSessionId.value || connectionStatus.value === 'connecting') return
-  const normalizedMessage = mode.value === 'planner' && ['需要', '继续', '好的', '好', '是的'].includes((message || '').trim())
-    ? `请继续基于当前会话上下文输出下一步可执行计划。用户补充：${message}`
+  const cached = [...getSessionMessages(activeSessionId.value)]
+  const shortReplies = ['需要', '继续', '好的', '好', '是的']
+  const isShortReply = mode.value === 'planner' && shortReplies.includes((message || '').trim())
+  const imageIntentHint = hasImageIntentInSession(cached) ? '，并继续为相关地点检索真实配图' : ''
+  const normalizedMessage = isShortReply
+    ? `请继续基于当前会话上下文输出下一步可执行计划${imageIntentHint}。用户补充：${message}`
     : message
   const session = sessions.value.find(item => item.id === activeSessionId.value)
   if (session && (!session.title || session.title === '新会话')) {
     session.title = normalizedMessage.length <= 16 ? normalizedMessage : normalizedMessage.slice(0, 16)
     sessions.value = sortSessions(sessions.value)
   }
-  const cached = [...getSessionMessages(activeSessionId.value)]
   cached.push({ content: message, isUser: true, time: new Date().toISOString() })
   setSessionMessages(activeSessionId.value, cached)
 
@@ -857,13 +870,19 @@ onBeforeUnmount(() => {
 }
 
 .stream-hint,
-.session-toast {
+.session-toast,
+.export-tip {
   flex-shrink: 0;
   margin: 0 0 10px;
   padding: 10px 14px;
   border-radius: 12px;
   font-size: 0.88rem;
   line-height: 1.5;
+}
+
+.export-tip {
+  color: rgba(255, 255, 255, 0.82);
+  border: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 .stream-hint {
