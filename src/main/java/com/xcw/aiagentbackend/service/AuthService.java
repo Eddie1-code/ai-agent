@@ -31,12 +31,18 @@ public class AuthService {
                   id BIGINT PRIMARY KEY AUTO_INCREMENT,
                   username VARCHAR(128) UNIQUE NOT NULL,
                   nickname VARCHAR(128),
-                  avatar_url VARCHAR(255),
+                  avatar_url TEXT,
                   password_hash VARCHAR(255) NOT NULL,
                   created_at DATETIME NOT NULL,
                   updated_at DATETIME NOT NULL
                 )
                 """);
+        // 兼容旧表：VARCHAR(255) → TEXT，避免 base64 头像被截断
+        try {
+            jdbcTemplate.execute("ALTER TABLE user_account MODIFY COLUMN avatar_url TEXT");
+        } catch (Exception ignored) {
+            // 已经是 TEXT 则忽略
+        }
     }
 
     public UserAccount register(String username, String password) {

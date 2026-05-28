@@ -85,6 +85,7 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { changePassword, clearAuthToken, getProfile, updateProfile } from '../api'
+import { compressAvatarFile } from '../utils/avatar'
 
 const router = useRouter()
 const loadingProfile = ref(false)
@@ -137,7 +138,7 @@ const onAvatarFileChange = async (event) => {
   }
   error.value = ''
   try {
-    const dataUrl = await readFileAsDataUrl(file)
+    const dataUrl = await compressAvatarFile(file, 200, 0.82)
     profile.avatarUrl = dataUrl
   } catch {
     error.value = '头像读取失败，请重试'
