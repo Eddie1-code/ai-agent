@@ -126,7 +126,7 @@ public class MentorApp {
         return content;
     }
 
-    @Resource
+    @Autowired(required = false)
     private ToolCallbackProvider toolCallbackProvider;
 
     public String doChatWithMcp(String message, String chatId) {
