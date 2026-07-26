@@ -1,5 +1,6 @@
 package com.xcw.aiagentbackend.service;
 
+import com.xcw.aiagentbackend.agent.AgentMetrics;
 import com.xcw.aiagentbackend.app.MentorApp;
 import com.xcw.aiagentbackend.model.chat.MentorMode;
 import com.xcw.aiagentbackend.model.chat.StreamEvent;
@@ -47,10 +48,20 @@ public class MentorChatService {
     private int mcpTimeoutSeconds;
 
     public Flux<StreamEvent> chatEventsByStream(MentorMode mode, String message, String chatId) {
+        AgentMetrics metrics = new AgentMetrics(mode.name().toLowerCase());
+
+        Flux<StreamEvent> result;
         if (mode == MentorMode.PLANNER) {
-            return chatPlannerWithAutoImage(message, chatId);
+            result = chatPlannerWithAutoImage(message, chatId);
+        } else {
+            result = chatCoachEvents(message, chatId);
         }
-        return chatCoachEvents(message, chatId);
+
+        return result.doFinally(signalType -> {
+            metrics.step(1).done();
+            metrics.markFinished();
+            metrics.logSummary();
+        });
     }
 
     private Flux<StreamEvent> chatCoachEvents(String message, String chatId) {

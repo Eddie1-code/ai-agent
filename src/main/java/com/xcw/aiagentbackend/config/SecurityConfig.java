@@ -33,7 +33,7 @@ public class SecurityConfig {
                         .accessDeniedHandler(restAccessDeniedHandler))
                 .authorizeHttpRequests(auth -> auth
                         .dispatcherTypeMatchers(DispatcherType.ASYNC, DispatcherType.ERROR).permitAll()
-                        .requestMatchers("/auth/**", "/health/**", "/swagger-ui.html", "/swagger-ui/**", "/v3/api-docs/**", "/public/images/**").permitAll()
+                        .requestMatchers("/auth/**", "/health/**", "/actuator/**", "/swagger-ui.html", "/swagger-ui/**", "/v3/api-docs/**", "/public/images/**").permitAll()
                         .requestMatchers("/ai/**", "/task/**", "/user/**", "/chat/**").authenticated()
                         .anyRequest().permitAll())
                 .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class)

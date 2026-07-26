@@ -18,6 +18,8 @@ import org.springframework.ai.model.tool.ToolCallingManager;
 import org.springframework.ai.model.tool.ToolExecutionResult;
 import org.springframework.ai.tool.ToolCallback;
 
+import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
 import java.util.stream.Collectors;
 
@@ -41,6 +43,12 @@ public class ToolCallAgent extends ReActAgent {
     // 禁用内置的工具调用机制，自己维护上下文
     private final ChatOptions chatOptions;
 
+    // Agent执行轨迹收集器（延迟初始化）
+    private AgentMetrics agentMetrics;
+
+    // 当前步骤的指标记录器（think中创建，act中完成）
+    private AgentMetrics.StepRecorder currentStepRecorder;
+
     public ToolCallAgent(ToolCallback[] availableTools) {
         super();
         this.availableTools = availableTools;
@@ -51,6 +59,23 @@ public class ToolCallAgent extends ReActAgent {
                 .build();
     }
 
+    private AgentMetrics metrics() {
+        if (agentMetrics == null) {
+            agentMetrics = new AgentMetrics(getName());
+        }
+        return agentMetrics;
+    }
+
+    @Override
+    protected void cleanup() {
+        super.cleanup();
+        if (agentMetrics != null) {
+            agentMetrics.markFinished();
+            agentMetrics.logSummary();
+            agentMetrics = null;
+        }
+    }
+
     /**
      * 处理当前状态并决定下一步行动
      *
@@ -58,6 +83,10 @@ public class ToolCallAgent extends ReActAgent {
      */
     @Override
     public boolean think() {
+        Instant thinkStart = Instant.now();
+        int currentStep = getCurrentStep();
+        AgentMetrics.StepRecorder recorder = metrics().step(currentStep);
+
         // 1. 校验提示词，拼接用户提示词
         if (getNextStepPrompt() != null && !getNextStepPrompt().isEmpty()) {
             UserMessage userMessage = new UserMessage(getNextStepPrompt());
@@ -73,6 +102,25 @@ public class ToolCallAgent extends ReActAgent {
                     .tools(availableTools)
                     .call()
                     .chatResponse();
+
+            long thinkMs = Duration.between(thinkStart, Instant.now()).toMillis();
+            recorder.thinkMs(thinkMs);
+
+            // 提取Token用量（如果DashScope返回了usage信息）
+            if (chatResponse.getMetadata() != null) {
+                try {
+                    var usage = chatResponse.getMetadata().getUsage();
+                    if (usage != null) {
+                        recorder.tokens(
+                            usage.getPromptTokens() != null ? usage.getPromptTokens() : 0,
+                            usage.getGenerationTokens() != null ? usage.getGenerationTokens() : 0
+                        );
+                    }
+                } catch (Exception ignored) {
+                    // usage信息不可用时忽略
+                }
+            }
+
             // 记录响应，用于 Act
             this.toolCallChatResponse = chatResponse;
             // 3.解析工具调用结果，获取要调用的工具和参数
@@ -91,15 +139,26 @@ public class ToolCallAgent extends ReActAgent {
                     )
                     .collect(Collectors.joining("\n"));
             log.info(toolCallInfo);
+
+            // 记录工具选择
+            for (AssistantMessage.ToolCall tc : toolCallList) {
+                recorder.addTool(tc.name(), tc.arguments());
+            }
+
             if (toolCallList.isEmpty()) {
                 // 只有不调用工具时，才记录助手消息
                 getMessageList().add(assistantMessage);
+                recorder.done();
+                this.currentStepRecorder = null;
                 return false;
             } else {
-                // 需要调用工具时，无需记录助手消息，因为调用工具时会自动记录
+                // 需要调用工具时，保存recorder供act()使用
+                this.currentStepRecorder = recorder;
                 return true;
             }
         } catch (Exception e) {
+            long thinkMs = Duration.between(thinkStart, Instant.now()).toMillis();
+            recorder.thinkMs(thinkMs).error(e.getMessage()).done();
             log.error(getName() + "的思考过程遇到了问题: " + e.getMessage());
             getMessageList().add(
                     new AssistantMessage("处理时遇到错误: " + e.getMessage()));
@@ -114,7 +173,12 @@ public class ToolCallAgent extends ReActAgent {
      */
     @Override
     public String act() {
+        Instant actStart = Instant.now();
+        AgentMetrics.StepRecorder recorder = this.currentStepRecorder;
+        this.currentStepRecorder = null;
+
         if (!toolCallChatResponse.hasToolCalls()) {
+            if (recorder != null) recorder.done();
             return "没有工具调用";
         }
         // 调用工具
@@ -134,6 +198,14 @@ public class ToolCallAgent extends ReActAgent {
                 .map(response -> "工具 " + response.name() + " 完成了它的任务！结果: " + response.responseData())
                 .collect(Collectors.joining("\n"));
         log.info(results);
+
+        // 记录act耗时
+        long actMs = Duration.between(actStart, Instant.now()).toMillis();
+        if (recorder != null) {
+            recorder.actMs(actMs);
+            recorder.done();
+        }
+
         return results;
     }
 }
