@@ -18,7 +18,7 @@ class MentorRagCloudAdvisorConfig {
     @Value("${spring.ai.dashscope.api-key}")
     private String dashScopeApiKey;
 
-    @Value("${app.rag.cloud.knowledge-index:AI Agent生活导师}")
+    @Value("${app.rag.cloud.knowledge-index:知域Agent}")
     private String knowledgeIndex;
 
     @Bean

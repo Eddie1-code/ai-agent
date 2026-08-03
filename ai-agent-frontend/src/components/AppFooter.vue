@@ -2,7 +2,7 @@
   <footer class="app-footer panel">
     <div class="footer-grid">
       <section>
-        <p class="eyebrow">MentorVerse</p>
+        <p class="eyebrow">知域Agent</p>
         <h3>{{ brandCopy.brandName }}</h3>
         <p class="copy">{{ brandCopy.footer.slogan }}</p>
       </section>

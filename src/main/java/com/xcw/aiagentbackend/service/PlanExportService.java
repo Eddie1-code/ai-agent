@@ -66,7 +66,7 @@ public class PlanExportService {
             Style orderedStyle = new Style().setFont(font).setFontSize(11).setMarginLeft(16);
             Style bodyStyle = new Style().setFont(font).setFontSize(11);
 
-            document.add(new Paragraph("AI生活导师行动计划")
+            document.add(new Paragraph("知域Agent行动计划")
                     .addStyle(titleStyle)
                     .setMarginBottom(10));
             document.add(new Paragraph("会话ID： " + sessionId).addStyle(metaStyle).setMarginBottom(3));

@@ -38,8 +38,8 @@
             >
               <span class="hero-sticker__ink" aria-hidden="true"></span>
               <span class="hero-sticker__ink-texture" aria-hidden="true"></span>
-              <span class="hero-sticker__sign-text hero-sticker__sign-text--top">AI Life</span>
-              <span class="hero-sticker__sign-text hero-sticker__sign-text--bottom">Mentor</span>
+              <span class="hero-sticker__sign-text hero-sticker__sign-text--top">知域</span>
+              <span class="hero-sticker__sign-text hero-sticker__sign-text--bottom">Agent</span>
             </p>
             <span class="hero-sticker__peel" aria-hidden="true"></span>
           </div>
@@ -64,9 +64,9 @@
         <div class="section-heading section-heading--split">
           <div>
             <p class="eyebrow">Issue 02 / Name Deconstruction</p>
-            <h2>MENTORVERSE</h2>
+            <h2>知域</h2>
           </div>
-          <p class="section-summary">AI 生活导师，聚焦你的决策、行动和复盘闭环。</p>
+          <p class="section-summary">知域Agent，聚焦你的决策、行动和复盘闭环。</p>
         </div>
 
         <div class="name-poster">
@@ -107,7 +107,7 @@
       >
         <div class="section-heading">
           <p class="eyebrow">{{ brandCopy.about.title }}</p>
-          <h2>ABOUT THIS MENTOR</h2>
+          <h2>ABOUT 知域</h2>
         </div>
         <div class="about-layout">
           <article class="panel about-card">
@@ -122,7 +122,7 @@
             </div>
           </article>
           <aside class="panel assistant-card">
-            <p class="eyebrow">Ask The Mentor</p>
+            <p class="eyebrow">Ask 知域</p>
             <p class="assistant-answer">“你可以只说一句话：我现在很乱。剩下的拆解和路径，我来给你。”</p>
             <div class="assistant-flow">
               <div v-for="step in mentorFlow" :key="step.title" class="flow-row">
@@ -249,8 +249,8 @@ import { brandCopy } from '../constants/copy'
 import { getAuthToken } from '../api'
 
 useHead({
-  title: '个性化AI生活导师',
-  meta: [{ name: 'description', content: '个性化AI生活导师，为你的学习、职业、生活提供长期可执行的成长路径。' }]
+  title: '知域Agent',
+  meta: [{ name: 'description', content: '知域Agent，为你的学习、职业、生活提供长期可执行的成长路径。' }]
 })
 
 const router = useRouter()
@@ -285,17 +285,12 @@ const sectionFold = ref({
 })
 
 const nameRows = [
-  { key: 'M', word: 'Mindful', desc: '先看见你的真实状态' },
-  { key: 'E', word: 'Evidence-based', desc: '建议有依据，不空泛' },
-  { key: 'N', word: 'Navigated', desc: '复杂目标拆成可走路径' },
-  { key: 'T', word: 'Trackable', desc: '每一步都可追踪和复盘' },
-  { key: 'O', word: 'Optimized', desc: '持续优化你的行动效率' },
-  { key: 'R', word: 'Reliable', desc: '稳定、长期、可信的陪跑' },
-  { key: 'V', word: 'Visioned', desc: '兼顾当下执行与长期愿景' },
-  { key: 'E', word: 'Empathetic', desc: '专业判断 + 温暖表达' },
-  { key: 'R', word: 'Result-driven', desc: '最终回到真实改变' },
-  { key: 'S', word: 'Structured', desc: '把混乱整理成结构' },
-  { key: 'E', word: 'Evolving', desc: '根据结果不断进化策略' }
+  { key: '知', word: '知悉', desc: '先看见你当前状态，再给出判断，不乱给建议' },
+  { key: '知', word: '知行', desc: '不只停留在对话，更推动你落地执行' },
+  { key: '知', word: '知觉', desc: '从模糊困扰中识别关键变量，把混乱变清晰' },
+  { key: '域', word: '领域', desc: '覆盖学习、职业、健康、关系等多生活场景' },
+  { key: '域', word: '疆域', desc: '持续拓宽你的认知边界与行动半径' },
+  { key: '域', word: '境域', desc: '安全、私密的个人成长空间，长期陪跑' }
 ]
 
 const projectLogos = ['⌘', 'Fut.', '▣', 'SM']

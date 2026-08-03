@@ -2,8 +2,8 @@
   <div class="auth-page">
     <div class="auth-grid section-shell">
       <section class="auth-intro">
-        <p class="auth-intro__eyebrow">MentorVerse Access</p>
-        <h1>连接你的 AI 生活导师</h1>
+        <p class="auth-intro__eyebrow">知域Agent Access</p>
+        <h1>连接你的知域Agent</h1>
         <p class="auth-intro__desc">
           登录后继续你的个人成长会话，查看历史记录，保持规划节奏与复盘连续性。
         </p>
@@ -17,7 +17,7 @@
       <section class="panel auth-card">
         <div class="auth-card__glow" aria-hidden="true"></div>
         <p class="auth-card__tag">Secure Sign In</p>
-        <h2>登录 AI 生活导师</h2>
+        <h2>登录知域Agent</h2>
         <p class="auth-tip">输入账号信息继续你的导师会话。</p>
         <form @submit.prevent="handleLogin" class="auth-form">
           <label>

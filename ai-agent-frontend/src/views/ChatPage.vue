@@ -130,8 +130,8 @@ import {
 import { brandCopy } from '../constants/copy'
 
 useHead({
-  title: 'AI生活导师 - 会话控制台',
-  meta: [{ name: 'description', content: '进入个性化AI生活导师会话，获取可执行的下一步建议。' }]
+  title: '知域Agent - 会话控制台',
+  meta: [{ name: 'description', content: '进入知域Agent会话，获取可执行的下一步建议。' }]
 })
 
 const router = useRouter()
@@ -546,7 +546,7 @@ const buildShareText = (session, sessionMessages) => {
   const lines = [`# ${session.title || '新会话'}`, '']
   for (const msg of sessionMessages) {
     if (msg.type === 'thinking' || msg.type === 'tool_call' || msg.type === 'tool_result') continue
-    const role = msg.isUser ? '用户' : 'AI导师'
+    const role = msg.isUser ? '用户' : '知域'
     lines.push(`## ${role}`)
     lines.push(msg.content || '')
     lines.push('')

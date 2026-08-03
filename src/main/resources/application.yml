@@ -42,7 +42,7 @@ app:
     local:
       enabled: false
     cloud:
-      knowledge-index: ${APP_RAG_CLOUD_KNOWLEDGE_INDEX:AI Agent生活导师}
+      knowledge-index: ${APP_RAG_CLOUD_KNOWLEDGE_INDEX:知域Agent}
   security:
     jwt-secret: ${APP_JWT_SECRET:change-me-to-a-long-secret-key-change-me}
     jwt-expire-seconds: ${APP_JWT_EXPIRE_SECONDS:86400}
