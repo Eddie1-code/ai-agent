@@ -41,4 +41,8 @@ src/main/resources/mcp-servers-prod.json
 image-search-mcp-server/src/main/resources/application-stdio.yml
 
 tmp
+__pycache__/
+*.pyc
+data/
+.vite/
 
