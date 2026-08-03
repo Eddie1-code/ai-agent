@@ -9,6 +9,7 @@ import java.time.LocalDateTime;
 @Builder
 public class AsyncTaskRecord {
     private String taskId;
+    private String requestId;
     private String mode;
     private String status;
     private String requestPayload;

@@ -13,6 +13,7 @@ import org.springframework.stereotype.Service;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -59,6 +60,14 @@ public class AsyncTaskService {
         );
         appTaskExecutor.submit(() -> executeTask(taskId, request));
         return taskId;
+    }
+
+    public List<AsyncTaskRecord> listLatest(int limit) {
+        return jdbcTemplate.query(
+                "SELECT task_id, mode, status, request_payload, result_payload, error_message, created_at, updated_at "
+                        + "FROM ai_async_task ORDER BY created_at DESC LIMIT ?",
+                new TaskRowMapper(), limit
+        );
     }
 
     public Optional<AsyncTaskRecord> findByTaskId(String taskId) {
