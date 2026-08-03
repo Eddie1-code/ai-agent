@@ -6,7 +6,9 @@
 [![Vue](https://img.shields.io/badge/Vue-3-4FC08D?logo=vuedotjs&logoColor=white)](https://vuejs.org/)
 [![Website](https://img.shields.io/badge/Online-www.xucanwei.top-4285F4?logo=googlechrome&logoColor=white)](https://www.xucanwei.top)
 
-知域Agent 是一个面向个人成长的 AI 助手系统，线上地址：[www.xucanwei.top](https://www.xucanwei.top)，通过大模型、RAG 知识检索与工具调用，帮助用户在学习、职业、情绪、健康与关系等场景中获得可执行的行动建议。
+知域Agent 是一个面向个人成长的 AI 助手系统，通过大模型、RAG 知识检索与工具调用，帮助用户在学习、职业、情绪、健康与关系等场景中获得可执行的行动建议。
+
+<h3 align="center"><a href="https://www.xucanwei.top">🌐 www.xucanwei.top</a></h3>
 
 ---
 
