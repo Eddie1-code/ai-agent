@@ -1,0 +1,94 @@
+{
+  "test_cases": [
+    {
+      "id": "coach_001",
+      "mode": "coach",
+      "query": "我最近总觉得很累，做什么都提不起劲，有什么办法改善吗？",
+      "expect_tools": [],
+      "expect_structure": ["结论", "步骤", "风险", "复盘"],
+      "expect_keywords": ["精力", "睡眠", "运动"],
+      "description": "教练模式：精力管理咨询"
+    },
+    {
+      "id": "coach_002",
+      "mode": "coach",
+      "query": "和同事发生了冲突，现在见面很尴尬，该怎么处理？",
+      "expect_tools": [],
+      "expect_structure": ["结论", "步骤", "风险"],
+      "expect_keywords": ["沟通", "道歉", "缓和"],
+      "description": "教练模式：人际关系咨询"
+    },
+    {
+      "id": "coach_003",
+      "mode": "coach",
+      "query": "我总是控制不住刷短视频，一刷就是两三个小时，怎么戒掉？",
+      "expect_tools": [],
+      "expect_structure": ["结论", "步骤", "复盘"],
+      "expect_keywords": ["时间", "习惯", "替代"],
+      "description": "教练模式：时间管理咨询"
+    },
+    {
+      "id": "coach_004",
+      "mode": "coach",
+      "query": "快30岁了，家里人催婚，但我自己还没准备好，怎么办？",
+      "expect_tools": [],
+      "expect_structure": ["结论", "步骤", "风险"],
+      "expect_keywords": ["沟通", "自我", "规划"],
+      "description": "教练模式：人生决策咨询"
+    },
+    {
+      "id": "coach_005",
+      "mode": "coach",
+      "query": "想转行做AI产品经理，但不知道从哪里入手",
+      "expect_tools": [],
+      "expect_structure": ["结论", "步骤", "风险", "复盘"],
+      "expect_keywords": ["学习", "项目", "技能"],
+      "description": "教练模式：职业发展规划"
+    },
+    {
+      "id": "planner_001",
+      "mode": "planner",
+      "query": "我想在三个月内学会Python，达到能做数据分析的水平，帮我制定一个学习计划",
+      "expect_tools": [],
+      "expect_structure": ["阶段", "目标", "时间"],
+      "expect_keywords": ["基础", "pandas", "项目"],
+      "description": "规划模式：学习计划"
+    },
+    {
+      "id": "planner_002",
+      "mode": "planner",
+      "query": "计划一次北京三日游，预算2000以内，要包含住宿和交通建议",
+      "expect_tools": ["地图", "搜索"],
+      "expect_structure": ["行程", "预算", "住宿"],
+      "expect_keywords": ["故宫", "地铁", "酒店"],
+      "description": "规划模式：旅行规划"
+    },
+    {
+      "id": "planner_003",
+      "mode": "planner",
+      "query": "给我制定一个30天的减脂计划，不伤膝盖的那种",
+      "expect_tools": [],
+      "expect_structure": ["阶段", "饮食", "运动"],
+      "expect_keywords": ["热量", "蛋白质", "有氧"],
+      "description": "规划模式：健康计划"
+    },
+    {
+      "id": "agent_001",
+      "mode": "agent",
+      "query": "帮我在网上搜索2024年AI应用开发的最新趋势，把结果整理成三个要点",
+      "expect_tools": ["WebSearchTool", "WebScrapingTool"],
+      "expect_structure": [],
+      "expect_keywords": ["AI", "Agent", "模型"],
+      "description": "Agent模式：信息搜索+整理"
+    },
+    {
+      "id": "agent_002",
+      "mode": "agent",
+      "query": "搜索一下杭州西湖附近的景点，帮我规划一个半日游路线，然后生成PDF",
+      "expect_tools": ["WebSearchTool", "PDFGenerationTool"],
+      "expect_structure": [],
+      "expect_keywords": ["西湖", "路线"],
+      "description": "Agent模式：搜索+规划+PDF导出"
+    }
+  ]
+}
