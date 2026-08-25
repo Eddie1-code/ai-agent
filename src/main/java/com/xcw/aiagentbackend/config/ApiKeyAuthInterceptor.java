@@ -1,13 +1,17 @@
 package com.xcw.aiagentbackend.config;
 
 import jakarta.annotation.Resource;
+import jakarta.servlet.DispatcherType;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.lang.Nullable;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Component;
 import org.springframework.web.servlet.HandlerInterceptor;
 
+import java.io.IOException;
 import java.util.ArrayDeque;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -26,9 +30,20 @@ public class ApiKeyAuthInterceptor implements HandlerInterceptor {
 
     @Override
     public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) throws Exception {
+        // 异步/错误重分发（如 SSE 流式完成后的再分发）不重复校验，避免与已占用的输出流冲突
+        DispatcherType dispatcherType = request.getDispatcherType();
+        if (dispatcherType == DispatcherType.ASYNC || dispatcherType == DispatcherType.ERROR) {
+            return true;
+        }
         request.setAttribute(START_AT, System.currentTimeMillis());
         String path = request.getRequestURI();
         if (path.contains("/swagger") || path.contains("/v3/api-docs") || path.contains("/health")) {
+            return true;
+        }
+        // 已通过 JWT 登录的 Web 用户无需 API Key，直接放行，避免登录后被拦截器 401 踢下线
+        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+        if (authentication != null && authentication.isAuthenticated()
+                && authentication.getAuthorities().stream().anyMatch(a -> "ROLE_USER".equals(a.getAuthority()))) {
             return true;
         }
         String apiKey = request.getHeader(API_KEY_HEADER);
@@ -36,15 +51,11 @@ public class ApiKeyAuthInterceptor implements HandlerInterceptor {
             apiKey = request.getParameter("apiKey");
         }
         if (apiKey == null || apiKey.isBlank() || !apiSecurityProperties.getApiKeys().contains(apiKey)) {
-            response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
-            response.setContentType("application/json;charset=UTF-8");
-            response.getWriter().write("{\"code\":40100,\"message\":\"非法 API Key\",\"data\":null}");
+            writeError(response, HttpServletResponse.SC_UNAUTHORIZED, "{\"code\":40100,\"message\":\"非法 API Key\",\"data\":null}");
             return false;
         }
         if (!allowRequest(apiKey, request.getRemoteAddr())) {
-            response.setStatus(429);
-            response.setContentType("application/json;charset=UTF-8");
-            response.getWriter().write("{\"code\":42900,\"message\":\"请求过于频繁\",\"data\":null}");
+            writeError(response, 429, "{\"code\":42900,\"message\":\"请求过于频繁\",\"data\":null}");
             return false;
         }
         return true;
@@ -78,6 +89,20 @@ public class ApiKeyAuthInterceptor implements HandlerInterceptor {
             }
             deque.addLast(now);
             return true;
+        }
+    }
+
+    private void writeError(HttpServletResponse response, int status, String body) {
+        if (response.isCommitted()) {
+            return;
+        }
+        response.setStatus(status);
+        response.setContentType("application/json;charset=UTF-8");
+        try {
+            response.getWriter().write(body);
+        } catch (IllegalStateException | IOException e) {
+            // 输出流已被占用（SSE/文件流等场景），无法再写错误体，直接结束
+            log.debug("无法写入错误响应: {}", e.getMessage());
         }
     }
 }

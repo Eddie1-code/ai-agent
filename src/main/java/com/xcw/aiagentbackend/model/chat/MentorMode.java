@@ -8,6 +8,11 @@ public enum MentorMode {
         if (value == null || value.isBlank()) {
             return COACH;
         }
-        return MentorMode.valueOf(value.trim().toUpperCase());
+        try {
+            return MentorMode.valueOf(value.trim().toUpperCase());
+        } catch (IllegalArgumentException e) {
+            // 未知模式（如历史/异常值）回退到 COACH，避免非法枚举在 SSE 同步阶段抛异常
+            return COACH;
+        }
     }
 }
