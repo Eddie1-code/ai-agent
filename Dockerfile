@@ -50,6 +50,9 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/* \
     && npm config set registry https://registry.npmmirror.com
 
+# 预装高德 MCP npm 包，避免运行时 npx 每次冷启动下载
+RUN npm install -g @amap/amap-maps-mcp-server
+
 WORKDIR /app
 
 # 复制 JAR
