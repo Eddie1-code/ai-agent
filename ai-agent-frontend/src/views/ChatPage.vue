@@ -610,26 +610,21 @@ const exportLatestPlan = async () => {
   try {
     const res = await exportLatestPlanPdf(activeSessionId.value)
     const exportId = res?.data?.exportId
-    if (exportId) {
-      const blob = await downloadExportPdf(exportId)
-      const objectUrl = URL.createObjectURL(new Blob([blob], { type: 'application/pdf' }))
-      const link = document.createElement('a')
-      link.href = objectUrl
-      link.download = `plan-${activeSessionId.value}.pdf`
-      document.body.appendChild(link)
-      link.click()
-      link.remove()
-      URL.revokeObjectURL(objectUrl)
+    if (!exportId) {
+      showToast(res?.message || '暂时没有可导出的计划')
+      return
     }
+    const blob = await downloadExportPdf(exportId)
+    const objectUrl = URL.createObjectURL(new Blob([blob], { type: 'application/pdf' }))
+    const link = document.createElement('a')
+    link.href = objectUrl
+    link.download = `plan-${activeSessionId.value}.pdf`
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    URL.revokeObjectURL(objectUrl)
   } catch {
-    const cached = [...getSessionMessages(activeSessionId.value)]
-    cached.push({
-      content: '导出失败，请确认当前会话中已有 AI 计划回复。',
-      isUser: false,
-      type: 'error',
-      time: new Date().toISOString()
-    })
-    setSessionMessages(activeSessionId.value, cached)
+    showToast('导出失败，请稍后重试')
   }
 }
 

@@ -27,11 +27,11 @@
                 </details>
               </div>
               <div v-else-if="msg.type === 'tool_result'" class="tool-card tool-card--result">
-                <div class="tool-card__title">{{ msg.toolName ? `工具 ${msg.toolName} 执行结果` : '工具执行结果' }}</div>
-                <div v-if="msg.images && msg.images.length" class="tool-card__badge">自动配图</div>
-                <div class="tool-card__summary">{{ summarizeToolText(msg.toolResult || msg.content) }}</div>
                 <details class="tool-card__details">
-                  <summary>查看结果原文</summary>
+                  <summary class="tool-card__summary-line">
+                    <span class="tool-card__summary-title">工具执行结果</span>
+                    <span class="tool-card__summary-text">{{ summarizeToolText(msg.toolResult || msg.content) }}</span>
+                  </summary>
                   <div class="rich-content" v-html="renderAiMessage(msg.toolResult || msg.content)"></div>
                 </details>
               </div>
@@ -45,7 +45,7 @@
                   rel="noreferrer"
                   class="image-link"
                 >
-                  <img :src="resolveImageUrl(img)" :alt="`生成图片${i + 1}`" />
+                  <img :src="resolveImageUrl(img)" :alt="`生成图片${i + 1}`" referrerpolicy="no-referrer" loading="lazy" />
                   <span>查看原图</span>
                 </a>
               </div>
@@ -1079,6 +1079,27 @@ p {
   cursor: pointer;
   font-size: 12px;
   color: #8fd8ff;
+  list-style: none;
+}
+
+.tool-card__details summary::-webkit-details-marker {
+  display: none;
+}
+
+.tool-card__summary-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px 10px;
+}
+
+.tool-card__summary-title {
+  font-weight: 700;
+  color: #cce8ff;
+}
+
+.tool-card__summary-text {
+  color: #deefff;
 }
 
 .image-list {

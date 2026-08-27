@@ -11,45 +11,27 @@ import org.springframework.ai.tool.ToolCallbackProvider;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.context.annotation.Lazy;
 
 import java.util.ArrayList;
 import java.util.List;
 
 /**
- * MCP stdio 客户端懒加载：启动时不拉起 image-search / amap 子进程，
- * 首次真正调用 MCP 工具时才 spawn，缩短冷启动时间。
+ * MCP stdio 客户端：启动时即拉起 amap / image-search 子进程并完成初始化，
+ * 首次调用 MCP 工具时无需再等待冷启动。
  */
 @Configuration
-public class LazyMcpClientConfiguration {
+public class McpClientConfiguration {
 
     @Bean
-    @Lazy
     public ToolCallbackProvider mcpToolCallbackProvider(
             ObjectProvider<List<NamedClientMcpTransport>> transportsProvider,
             McpClientCommonProperties commonProperties) {
 
-        return new ToolCallbackProvider() {
-            private volatile ToolCallback[] callbacks;
-
-            @Override
-            public ToolCallback[] getToolCallbacks() {
-                ToolCallback[] result = callbacks;
-                if (result == null) {
-                    synchronized (this) {
-                        result = callbacks;
-                        if (result == null) {
-                            List<NamedClientMcpTransport> transports = transportsProvider.stream()
-                                    .flatMap(List::stream)
-                                    .toList();
-                            result = buildToolCallbacks(transports, commonProperties);
-                            callbacks = result;
-                        }
-                    }
-                }
-                return result;
-            }
-        };
+        List<NamedClientMcpTransport> transports = transportsProvider.stream()
+                .flatMap(List::stream)
+                .toList();
+        ToolCallback[] callbacks = buildToolCallbacks(transports, commonProperties);
+        return () -> callbacks;
     }
 
     private static ToolCallback[] buildToolCallbacks(

@@ -90,7 +90,7 @@ mysql -u root -p ai_agent < sql/create.sql
 export DASHSCOPE_API_KEY="your-dashscope-key"
 export APP_JWT_SECRET="your-jwt-secret"
 # 可选
-export PEXELS_API_KEY="your-pexels-key"
+export SEARCH_API_KEY="your-searchapi-key"   # SearchAPI：百度网页搜索 + 实景图片搜索共用
 export AMAP_MAPS_API_KEY="your-amap-key"
 ```
 

@@ -371,6 +371,7 @@ public class AiController {
         text = stripImageLinkArtifacts(text);
         text = stripNoisySymbolLines(text);
         text = PlanMarkdownNormalizer.stripOrphanHashLines(text);
+        text = PlanMarkdownNormalizer.fixBrokenBoldMarkers(text);
         text = foldLongImageLinks(text);
         return truncateText(text, MAX_EVENT_TEXT_LENGTH);
     }

@@ -53,11 +53,12 @@ app:
 mentor:
   mcp-timeout-seconds: ${MENTOR_MCP_TIMEOUT_SECONDS:90}
 
-pexels:
-  api-key: ${PEXELS_API_KEY:}
-
 search-api:
   api-key: ${SEARCH_API_KEY:}
+
+image-search:
+  # 真实图片搜索引擎：google_images（已确认支持）或 bing_images（备选）
+  engine: ${IMAGE_SEARCH_ENGINE:google_images}
 
 tencent:
   aiart:
